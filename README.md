@@ -1,1 +1,1 @@
-# DigitHuman
+# AdaptiveNerf
