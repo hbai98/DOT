@@ -2,11 +2,11 @@ import setuptools
 
 
 setuptools.setup(
-    name='DigitHuman',
+    name='AdaptiveNerf',
     version='0.0.1',
     author='Haotian Bai',
     author_email='haotianwhite@outlook.com',
-    description='Simple framework for 3D digital human reconstruction',
+    description='Adaptive Neural Radiance Field for Super-Resolution',
     url='https://github.com/164140757/DigitHuman',
     packages=setuptools.find_packages(),
     license='Internal',
