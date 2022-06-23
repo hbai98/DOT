@@ -1,7 +1,7 @@
 #!/bin/sh		
 #BSUB -J nerf
 #BSUB -n 4     
-#BSUB -m g-node02
+#BSUB -m g-node03
 #BSUB -q gpu         
 #BSUB -gpgpu 1
 #BSUB -o out.%J      
@@ -11,24 +11,22 @@
 nvidia-smi
 
 module load anaconda3
+module load cuda-11.4
 source activate
 conda activate cu113
 
-export DATA_ROOT=./data/Synthetic_NeRF
-export CKPT_ROOT=./checkpoints/syn_sh16/
-export SCENE=chair
-export CONFIG_FILE=./config/blender
+experiment_name=test
+config=configs/llff.json
+CKPT_DIR=checkpoints/${experiment_name}
+data_dir=data/Synthetic_NeRF/Drums
+mkdir -p $CKPT_DIR
+NOHUP_FILE=$CKPT_DIR/log
+echo Launching experiment ${experiment_name}
+echo CKPT $CKPT_DIR
+echo LOGFILE $NOHUP_FILE
 
-python -m tools.train \
-    --train_dir $CKPT_ROOT/$SCENE/ \
-    --config $CONFIG_FILE \
-    --data_dir $DATA_ROOT/$SCENE/
-
-python -m tools.eval \
-    --chunk 4096 \
-    --train_dir $CKPT_ROOT/$SCENE/ \
-    --config $CONFIG_FILE \
-    --data_dir $DATA_ROOT/$SCENE/
+python -u opt/opt.py -t $CKPT_DIR ${data_dir} > $NOHUP_FILE 2>&1 
+echo DETACH
 
 # dataset='office_home'
 # port=3039
