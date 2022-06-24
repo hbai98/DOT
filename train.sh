@@ -1,7 +1,7 @@
 #!/bin/sh		
 #BSUB -J nerf
 #BSUB -n 4     
-#BSUB -m g-node03
+#BSUB -m g-node01
 #BSUB -q gpu         
 #BSUB -gpgpu 1
 #BSUB -o out.%J      
@@ -13,19 +13,19 @@ nvidia-smi
 module load anaconda3
 module load cuda-11.4
 source activate
-conda activate cu113
+conda activate Adnerf
 
-experiment_name=test
-config=configs/llff.json
+experiment_name=orig/o2
+config=config/syn.json
 CKPT_DIR=checkpoints/${experiment_name}
-data_dir=data/Synthetic_NeRF/Drums
+data_dir=data/nerf_synthetic/drums
 mkdir -p $CKPT_DIR
 NOHUP_FILE=$CKPT_DIR/log
 echo Launching experiment ${experiment_name}
 echo CKPT $CKPT_DIR
 echo LOGFILE $NOHUP_FILE
 
-python -u opt/opt.py -t $CKPT_DIR ${data_dir} > $NOHUP_FILE 2>&1 
+python opt/opt.py -t $CKPT_DIR ${data_dir} -c ${config} > $NOHUP_FILE 2>&1  
 echo DETACH
 
 # dataset='office_home'
