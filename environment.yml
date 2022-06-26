@@ -22,6 +22,8 @@ dependencies:
       - moviepy
       - matplotlib
       - scipy>=1.6.0
+      - timm
+      - einops
   - pytorch
   - torchvision
   - cudatoolkit

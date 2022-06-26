@@ -1,8 +1,12 @@
 # AdaptiveNerf
 
 ```
+module load cuda-11.4
 conda env create -f environment.yml
 conda activate Adnerf
+pip install .
+
+cd svox
 pip install .
 ```
 

@@ -12,3 +12,5 @@ pyyaml
 tensorflow
 pymcubes
 svox>=0.2.26
+timm
+einops
