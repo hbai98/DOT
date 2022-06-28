@@ -1,0 +1,3 @@
+[submodule "svox"]
+	path = svox
+	url = https://github.com/sxyu/svox.git

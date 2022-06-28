@@ -6,7 +6,7 @@ conda env create -f environment.yml
 conda activate Adnerf
 pip install .
 
-cd svox
+cd svox 
 pip install .
 ```
 
