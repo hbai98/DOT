@@ -21,5 +21,4 @@ with torch.no_grad():
 plt.imshow(im.cpu())
 plt.show()
 plt.savefig('well.jpg')
-
 print('end')
