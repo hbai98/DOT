@@ -16,14 +16,16 @@ class TreeConv(nn.Module):
 
         """
         super().__init__()
-        self.conv = nn.Conv1d(in_channels, out_channels, degree, bias=True)
-        self.act  = create_act_layer(act, inplace=inplace)
-
+        self.conv = nn.Conv1d(in_channels, out_channels, kernel_size=degree, bias=True)
+        self.norm  = nn.LayerNorm(out_channels)
+        self.act = create_act_layer(act)
     def forward(self, x):
         """
-        x is expected to have shape (B, N, C), where N is the number of children
+        x is expected to have shape (N, C, L) or (C, L), where L is the number of children
+        
+        : return: the encoded leaf nodes' feature (out_channels)
         """
-        x = self.conv(x)
-        # Layer norm done over channel dim only
+        x = self.conv(x).squeeze(-1)
+        x = self.norm(x)
         x = self.act(x)
-        return x  # (B, C, H//2, W//2)
+        return x  
