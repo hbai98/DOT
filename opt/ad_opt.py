@@ -68,7 +68,7 @@ group.add_argument('--lambda_beta', type=float, default=
 
 
 group = parser.add_argument_group("optimization")
-group.add_argument('--n_iters', type=int, default=8 * 12800, help='total number of iters to optimize for')
+group.add_argument('--n_iters', type=int, default=2 * 12800, help='total number of iters to optimize for')
 group.add_argument('--batch_size', type=int, default=
                      5000,
                      #100000,
@@ -79,11 +79,23 @@ group.add_argument('--batch_size', type=int, default=
 # TODO: make the lr higher near the end
 group.add_argument('--sigma_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Density optimizer")
 group.add_argument('--lr_sigma', type=float, default=3e1, help='SGD/rmsprop lr for sigma')
-
+group.add_argument('--lr_sigma_final', type=float, default=5e-2)
+group.add_argument('--lr_sigma_decay_steps', type=int, default=250000)
+group.add_argument('--lr_sigma_delay_steps', type=int, default=15000,
+                   help="Reverse cosine steps (0 means disable)")
+group.add_argument('--lr_sigma_delay_mult', type=float, default=1e-2)#1e-4)#1e-4)
 group.add_argument('--sh_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="SH optimizer")
 group.add_argument('--lr_sh', type=float, default=
                     1e-2,
                    help='SGD/rmsprop lr for SH')
+group.add_argument('--lr_sh_final', type=float,
+                      default=
+                    5e-6
+                    )
+group.add_argument('--lr_sh_decay_steps', type=int, default=250000)
+group.add_argument('--lr_sh_delay_steps', type=int, default=0, help="Reverse cosine steps (0 means disable)")
+group.add_argument('--lr_sh_delay_mult', type=float, default=1e-2)
+group.add_argument('--lr_fg_begin_step', type=int, default=0, help="Foreground begins training at given step number")
 
 group.add_argument('--rms_beta', type=float, default=0.95, help="RMSProp exponential averaging factor")
 
@@ -160,7 +172,7 @@ grid = svox2.SparseGrid(reso=reso_list[reso_id],
                         basis_dim=args.sh_dim,
                         use_z_order=True,
                         device=device,
-                        basis_type=svox2.__dict__['BASIS_TYPE_' + 'sh'])
+                        basis_type=svox2.__dict__['BASIS_TYPE_' + args.basis_type.upper()])
 
 # DC -> gray; mind the SH scaling!
 grid.sh_data.data[:] = 0.0
@@ -199,8 +211,13 @@ resample_cameras = [
     ]
 ckpt_path = path.join(args.train_dir, 'ckpt.npz')
 
-
-
+lr_sigma_func = get_expon_lr_func(args.lr_sigma, args.lr_sigma_final, args.lr_sigma_delay_steps,
+                                  args.lr_sigma_delay_mult, args.lr_sigma_decay_steps)
+lr_sh_func = get_expon_lr_func(args.lr_sh, args.lr_sh_final, args.lr_sh_delay_steps,
+                               args.lr_sh_delay_mult, args.lr_sh_decay_steps)
+lr_sigma_factor = 1.0
+lr_sh_factor = 1.0
+lr_basis_factor = 1.0
 
 epoch_id = -1
 while True:
@@ -291,7 +308,8 @@ while True:
         stats = {"mse" : 0.0, "psnr" : 0.0, "invsqr_mse" : 0.0}
         for iter_id, batch_begin in pbar:
             gstep_id = iter_id + gstep_id_base
-            
+            lr_sigma = lr_sigma_func(gstep_id) * lr_sigma_factor
+            lr_sh = lr_sh_func(gstep_id) * lr_sh_factor
 
 
             batch_end = min(batch_begin + args.batch_size, epoch_size)
