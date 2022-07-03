@@ -24,8 +24,13 @@
 
 Usage:
 
+<<<<<<< HEAD
 export DATA_ROOT=./data/NeRF/nerf_synthetic/
 export CKPT_ROOT=./data/PlenOctree/checkpoints/syn_sh16
+=======
+export DATA_ROOT=/hpc/users/CONNECT/wangxikm/humandi/nerf/nerf_synthetic
+export CKPT_ROOT=/hpc/users/CONNECT/wangxikm/humandi/adnerf/data/Plenoctree/checkpoints/syn_sh16
+>>>>>>> 9662b41... optimization
 export SCENE=chair
 export CONFIG_FILE=nerf_sh/config/blender
 
