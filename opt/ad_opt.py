@@ -8,8 +8,8 @@ import torch.cuda
 import torch.optim
 import torch.nn.functional as F
 import svox2
+import svox
 import json
-import imageio
 import os
 from os import path
 import shutil
@@ -17,10 +17,11 @@ import gc
 import numpy as np
 import math
 import argparse
-import cv2
 from util.dataset import datasets
 from util.util import Timing, get_expon_lr_func, generate_dirs_equirect, viridis_cmap
 from util import config_util
+from model.utils import setup_render_opts
+from model import AdTree
 
 from warnings import warn
 from datetime import datetime
@@ -47,16 +48,13 @@ group.add_argument('--reso',
                             'stays at the last one; ' +
                             'should be a list where each item is a list of 3 ints or an int')
 
+# group.add_argument('--basis_type',
+#                     choices=['sh', '3d_texture', 'mlp'],
+#                     default='sh',
+#                     help='Basis function type')
 
-
-
-group.add_argument('--basis_type',
-                    choices=['sh', '3d_texture', 'mlp'],
-                    default='sh',
-                    help='Basis function type')
-
-group.add_argument('--sh_dim', type=int, default=9, help='SH/learned basis dimensions (at most 10)')
-
+group.add_argument('--depth_limit', type=int, default=12, help='the depth limit of the octree.')
+group.add_argument('--deepth')
 
 group.add_argument('--lambda_sparsity', type=float, default=
                     0.0,
@@ -165,37 +163,28 @@ dset_test = datasets[args.dataset_type](
 
 global_start_time = datetime.now()
 
-grid = svox2.SparseGrid(reso=reso_list[reso_id],
-                        center=dset.scene_center,
-                        radius=dset.scene_radius,
-                        use_sphere_bound=dset.use_sphere_bound and not False,
-                        basis_dim=args.sh_dim,
-                        use_z_order=True,
-                        device=device,
-                        basis_type=svox2.__dict__['BASIS_TYPE_' + args.basis_type.upper()])
+# grid = svox2.SparseGrid(reso=reso_list[reso_id],
+#                         center=dset.scene_center,
+#                         radius=dset.scene_radius,
+#                         use_sphere_bound=dset.use_sphere_bound and not False,
+#                         basis_dim=args.sh_dim,
+#                         use_z_order=True,
+#                         device=device,
+#                         basis_type=svox2.__dict__['BASIS_TYPE_' + args.basis_type.upper()])
 
-# DC -> gray; mind the SH scaling!
-grid.sh_data.data[:] = 0.0
-grid.density_data.data[:] = args.init_sigma
+# # DC -> gray; mind the SH scaling!
+# grid.sh_data.data[:] = 0.0
+# grid.density_data.data[:] = args.init_sigma
 
+tree = AdTree(data_dim=args.data_dim,
+              depth_limit=args.depth_limit,)
 
 lr_sigma = args.lr_sigma
 lr_sh = args.lr_sh
 
-#  grid.sh_data.data[:, 0] = 4.0
-#  osh = grid.density_data.data.shape
-#  den = grid.density_data.data.view(grid.links.shape)
-#  #  den[:] = 0.00
-#  #  den[:, :256, :] = 1e9
-#  #  den[:, :, 0] = 1e9
-#  grid.density_data.data = den.view(osh)
-
-
-
-
-grid.requires_grad_(True)
-config_util.setup_render_opts(grid.opt, args)
-print('Render options', grid.opt)
+tree.requires_grad_(True)
+# setup_render_opts(grid.opt, args)
+# print('Render options', grid.opt)
 
 gstep_id_base = 0
 
@@ -209,17 +198,19 @@ resample_cameras = [
                      height=dset.get_image_size(i)[0],
                      ndc_coeffs=dset.ndc_coeffs) for i, c2w in enumerate(dset.c2w)
     ]
+
 ckpt_path = path.join(args.train_dir, 'ckpt.npz')
 
 lr_sigma_func = get_expon_lr_func(args.lr_sigma, args.lr_sigma_final, args.lr_sigma_delay_steps,
                                   args.lr_sigma_delay_mult, args.lr_sigma_decay_steps)
-lr_sh_func = get_expon_lr_func(args.lr_sh, args.lr_sh_final, args.lr_sh_delay_steps,
+lr_data_func = get_expon_lr_func(args.lr_sh, args.lr_sh_final, args.lr_sh_delay_steps,
                                args.lr_sh_delay_mult, args.lr_sh_decay_steps)
 lr_sigma_factor = 1.0
 lr_sh_factor = 1.0
 lr_basis_factor = 1.0
 
 epoch_id = -1
+
 while True:
     dset.shuffle_rays()
     epoch_id += 1
@@ -257,7 +248,7 @@ while True:
                                    width=dset_test.get_image_size(img_id)[1],
                                    height=dset_test.get_image_size(img_id)[0],
                                    ndc_coeffs=dset_test.ndc_coeffs)
-                rgb_pred_test = grid.volume_render_image(cam, use_kernel=True)
+                rgb_pred_test = tree.volume_render_image(cam, use_kernel=True)
                 rgb_gt_test = dset_test.gt[img_id].to(device=device)
                 all_mses = ((rgb_gt_test - rgb_pred_test) ** 2).cpu()
                 if i % img_save_interval == 0:
@@ -309,7 +300,7 @@ while True:
         for iter_id, batch_begin in pbar:
             gstep_id = iter_id + gstep_id_base
             lr_sigma = lr_sigma_func(gstep_id) * lr_sigma_factor
-            lr_sh = lr_sh_func(gstep_id) * lr_sh_factor
+            lr_sh = lr_data_func(gstep_id) * lr_sh_factor
 
 
             batch_end = min(batch_begin + args.batch_size, epoch_size)

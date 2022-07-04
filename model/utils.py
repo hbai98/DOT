@@ -29,3 +29,18 @@ class TreeConv(nn.Module):
         x = self.norm(x)
         x = self.act(x)
         return x  
+    
+def setup_render_opts(opt, args):
+    """
+    Pass render arguments to the Adtree renderer options
+    """
+    # opt.step_size = args.step_size
+    opt.sigma_thresh = args.sigma_thresh
+    opt.stop_thresh = args.stop_thresh
+    # opt.background_brightness = args.background_brightness
+    # opt.backend = args.renderer_backend
+    opt.random_sigma_std = args.random_sigma_std
+    opt.random_sigma_std_background = args.random_sigma_std_background
+    opt.last_sample_opaque = args.last_sample_opaque
+    opt.near_clip = args.near_clip
+    # opt.use_spheric_clip = args.use_spheric_clip

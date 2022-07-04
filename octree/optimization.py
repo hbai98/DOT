@@ -24,13 +24,8 @@
 
 Usage:
 
-<<<<<<< HEAD
 export DATA_ROOT=./data/NeRF/nerf_synthetic/
 export CKPT_ROOT=./data/PlenOctree/checkpoints/syn_sh16
-=======
-export DATA_ROOT=/hpc/users/CONNECT/wangxikm/humandi/nerf/nerf_synthetic
-export CKPT_ROOT=/hpc/users/CONNECT/wangxikm/humandi/adnerf/data/Plenoctree/checkpoints/syn_sh16
->>>>>>> 9662b41... optimization
 export SCENE=chair
 export CONFIG_FILE=nerf_sh/config/blender
 
@@ -128,11 +123,7 @@ flags.DEFINE_bool(
 
 flags.DEFINE_bool(
     "continue_on_decrease",
-<<<<<<< HEAD
     False,
-=======
-    True,
->>>>>>> 9662b41... optimization
     "If set, continues training even if validation PSNR decreases",
 )
 
@@ -173,13 +164,6 @@ def main(unused_argv):
     os.makedirs(vis_dir, exist_ok=True)
 
     print('N3Tree load')
-<<<<<<< HEAD
-=======
-
-
-
-    #t=svox.N3Tree(data_dim=4,data_format="RGBA",device=device)
->>>>>>> 9662b41... optimization
     t = svox.N3Tree.load(FLAGS.input, map_location=device)
     #  t.nan_to_num_()
 
@@ -255,11 +239,7 @@ def main(unused_argv):
                 print('')
             elif not FLAGS.continue_on_decrease:
                 print('Stop since overfitting')
-<<<<<<< HEAD
                 break
-=======
-                #break
->>>>>>> 9662b41... optimization
     if not FLAGS.nosave:
         if best_t is not None:
             print('Saving best model to', FLAGS.output)

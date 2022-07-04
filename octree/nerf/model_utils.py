@@ -42,7 +42,7 @@ class MLP(nn.Module):
         net_width: int = 256,  # The width of the first part of MLP.
         net_depth_condition: int = 1,  # The depth of the second part of MLP.
         net_width_condition: int = 128,  # The width of the second part of MLP.
-        net_activation: Callable[Ellipsis, Any] = nn.ReLU(),  # The activation function.
+        net_activation: Callable[..., Any] = nn.ReLU(),  # The activation function.
         skip_layer: int = 4,  # The layer to add skip layers to.
         num_rgb_channels: int = 3,  # The number of RGB channels.
         num_sigma_channels: int = 1,  # The number of sigma channels.

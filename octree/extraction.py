@@ -310,7 +310,7 @@ def step1(args, tree, nerf, dataset):
     for i in tqdm(range(0, grid.shape[0], args.chunk)):
         grid_chunk = grid[i:i+args.chunk].cuda()
         if nerf.use_viewdirs:
-            fake_viewdirs = torch.zeros([grid_chunk.shape[0], 3], device=grid_chunk.device)
+            fake_viewdirs = torch.zeros([grid_chunk.shape[0], 3], devic03e=grid_chunk.device)
         else:
             fake_viewdirs = None
         rgb, sigma = nerf.eval_points_raw(grid_chunk, fake_viewdirs)
