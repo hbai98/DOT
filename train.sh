@@ -1,7 +1,7 @@
 #!/bin/sh		
 #BSUB -J nerf
 #BSUB -n 4     
-#BSUB -m g-node01
+#BSUB -m g-node02
 #BSUB -q gpu         
 #BSUB -gpgpu 1
 #BSUB -o out.%J      
@@ -16,7 +16,7 @@ source activate
 conda activate Adnerf
 
 experiment_name=orig/o2
-config=config/syn.json
+config=opt/configs/syn.json
 CKPT_DIR=checkpoints/${experiment_name}
 data_dir=data/nerf_synthetic/drums
 mkdir -p $CKPT_DIR
@@ -25,7 +25,7 @@ echo Launching experiment ${experiment_name}
 echo CKPT $CKPT_DIR
 echo LOGFILE $NOHUP_FILE
 
-python opt/opt.py -t $CKPT_DIR ${data_dir} -c ${config} > $NOHUP_FILE 2>&1  
+python opt/ad_opt.py -t $CKPT_DIR ${data_dir} -c ${config} > $NOHUP_FILE 2>&1  
 echo DETACH
 
 # dataset='office_home'

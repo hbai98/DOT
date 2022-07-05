@@ -1,6 +1,7 @@
 import unittest
-from model import AdTree
+from opt.model import AdTree
 import torch
+import svox
 
 class TestSvox(unittest.TestCase):
     # python -m unittest test.test_adtree.TestSvox
@@ -55,3 +56,36 @@ class TestSvox(unittest.TestCase):
         self.assertTrue(features.size(), torch.Size([32]))
         # python -m unittest test.test_adtree.TestSvox.test_encode
     
+    def test_init_gradient(self):
+        self.t.cuda()
+        orig_data = self.t.data.clone()
+        
+        r = svox.VolumeRenderer(self.t)
+
+        target =  .2*torch.ones((1,31)).cuda()
+
+        ray_ori = torch.tensor([[0.1, 0.1, -0.1]]).cuda()
+        ray_dir = torch.tensor([[0.0, 0.0, 1.0]]).cuda()
+        ray = svox.Rays(origins=ray_ori, dirs=ray_dir, viewdirs=ray_dir)
+
+        lr = 1e-2
+
+        print('GRADIENT DESC')
+
+        for i in range(20):
+            rend = r(ray, cuda=True)
+            if i % 5 == 0:
+                print(rend.detach()[0].cpu().numpy())
+            ((rend - target) ** 2).sum().backward()
+            self.t.data.data -= lr * self.t.data.grad
+            self.t.zero_grad()
+        
+        print('TARGET')
+        print(target[0].cpu().numpy())
+        latest_data = self.t.data
+        
+        print('Adtree')
+        print(self.t.data.requires_grad)
+        print(torch.abs(latest_data-orig_data))
+        # python -m unittest test.test_adtree.TestSvox.test_init_gradient
+        

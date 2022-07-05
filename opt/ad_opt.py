@@ -18,12 +18,10 @@ import numpy as np
 import math
 import argparse
 from util.dataset import datasets
-from util.util import Timing, get_expon_lr_func, generate_dirs_equirect, viridis_cmap
+from util.util import  get_expon_lr_func, viridis_cmap
 from util import config_util
-from model.utils import setup_render_opts
 from model import AdTree
 
-from warnings import warn
 from datetime import datetime
 from torch.utils.tensorboard import SummaryWriter
 
@@ -39,22 +37,22 @@ group = parser.add_argument_group("general")
 group.add_argument('--train_dir', '-t', type=str, default='ckpt',
                      help='checkpoint and logging directory')
 
-group.add_argument('--reso',
-                        type=str,
-                        default=
-                        "[[256, 256, 256], [512, 512, 512]]",
-                       help='List of grid resolution (will be evaled as json);'
-                            'resamples to the next one every upsamp_every iters, then ' +
-                            'stays at the last one; ' +
-                            'should be a list where each item is a list of 3 ints or an int')
+# group.add_argument('--reso',
+#                         type=str,
+#                         default=
+#                         "[[256, 256, 256], [512, 512, 512]]",
+#                        help='List of grid resolution (will be evaled as json);'
+#                             'resamples to the next one every upsamp_every iters, then ' +
+#                             'stays at the last one; ' +
+#                             'should be a list where each item is a list of 3 ints or an int')
 
 # group.add_argument('--basis_type',
 #                     choices=['sh', '3d_texture', 'mlp'],
 #                     default='sh',
 #                     help='Basis function type')
-
+group.add_argument('--data_dim', type=int, default=32, help='the data hidden dimension of sampled leaf nodes.')
 group.add_argument('--depth_limit', type=int, default=12, help='the depth limit of the octree.')
-group.add_argument('--deepth')
+group.add_argument('--renderer_step_size', type=float, default=1e-5, help="float step size eps, added to each voxel aabb intersection step in the tree rendering.")
 
 group.add_argument('--lambda_sparsity', type=float, default=
                     0.0,
@@ -137,7 +135,6 @@ config_util.maybe_merge_config_file(args)
 os.makedirs(args.train_dir, exist_ok=True)
 summary_writer = SummaryWriter(args.train_dir)
 
-reso_list = json.loads(args.reso)
 reso_id = 0
 
 with open(path.join(args.train_dir, 'args.json'), 'w') as f:
@@ -178,6 +175,7 @@ global_start_time = datetime.now()
 
 tree = AdTree(data_dim=args.data_dim,
               depth_limit=args.depth_limit,)
+tree.cuda()
 
 lr_sigma = args.lr_sigma
 lr_sh = args.lr_sh
@@ -210,6 +208,12 @@ lr_sh_factor = 1.0
 lr_basis_factor = 1.0
 
 epoch_id = -1
+
+if 'llff' == args.dataset_type or path.isfile(path.join(args.data_dir, 'poses_bounds.npy')):
+    ndc_config = svox.NDCConfig(width=resample_cameras[0].width, height=resample_cameras[0].height, focal=dset.focal)
+else:
+    ndc_config = None
+render = svox.VolumeRenderer(tree, step_size=args.renderer_step_size, ndc=ndc_config)
 
 while True:
     dset.shuffle_rays()
@@ -248,7 +252,7 @@ while True:
                                    width=dset_test.get_image_size(img_id)[1],
                                    height=dset_test.get_image_size(img_id)[0],
                                    ndc_coeffs=dset_test.ndc_coeffs)
-                rgb_pred_test = tree.volume_render_image(cam, use_kernel=True)
+                rgb_pred_test = render.render_persp(c2w, height=cam.height, width=cam.width, fx=cam.fx_val, fast=False)
                 rgb_gt_test = dset_test.gt[img_id].to(device=device)
                 all_mses = ((rgb_gt_test - rgb_pred_test) ** 2).cpu()
                 if i % img_save_interval == 0:
@@ -261,7 +265,7 @@ while True:
                         summary_writer.add_image(f'test/mse_map_{img_id:04d}',
                                 mse_img, global_step=gstep_id_base, dataformats='HWC')
                     if args.log_depth_map:
-                        depth_img = grid.volume_render_depth_image(cam,
+                        depth_img = tree.volume_render_depth_image(cam,
                                     args.log_depth_map_use_thresh if
                                     args.log_depth_map_use_thresh else None
                                 )
@@ -302,19 +306,14 @@ while True:
             lr_sigma = lr_sigma_func(gstep_id) * lr_sigma_factor
             lr_sh = lr_data_func(gstep_id) * lr_sh_factor
 
-
             batch_end = min(batch_begin + args.batch_size, epoch_size)
             batch_origins = dset.rays.origins[batch_begin: batch_end]
             batch_dirs = dset.rays.dirs[batch_begin: batch_end]
             rgb_gt = dset.rays.gt[batch_begin: batch_end]
             rays = svox2.Rays(batch_origins, batch_dirs)
 
-            #  with Timing("volrend_fused"):
-            rgb_pred = grid.volume_render_fused(rays, rgb_gt,
-                    beta_loss=args.lambda_beta,
-                    sparsity_loss=args.lambda_sparsity,
-                    randomize=args.enable_random)
-
+            # #  with Timing("volrend_fused"):
+            rgb_pred = render(rays, cuda=True, fast=False)
             #  with Timing("loss_comp"):
             mse = F.mse_loss(rgb_gt, rgb_pred)
 
@@ -339,8 +338,8 @@ while True:
  
 
                 if gstep_id >= 0:
-                    grid.optim_density_step(lr_sigma, beta=args.rms_beta, optim=args.sigma_optim)
-                    grid.optim_sh_step(lr_sh, beta=args.rms_beta, optim=args.sh_optim)
+                    tree.optim_density_step(lr_sigma, beta=args.rms_beta, optim=args.sigma_optim)
+                    tree.optim_sh_step(lr_sh, beta=args.rms_beta, optim=args.sh_optim)
 
 
 
@@ -352,15 +351,15 @@ while True:
     if args.save_every > 0 and (epoch_id + 1) % max(
             factor, args.save_every) == 0 and not args.tune_mode:
         print('Saving', ckpt_path)
-        grid.save(ckpt_path)
+        tree.save(ckpt_path)
 
+    # TODO: ADD adaptive sampling 
 
-
-        if factor > 1 and reso_id < len(reso_list) - 1:
-            print('* Using higher resolution images due to large grid; new factor', factor)
-            factor //= 2
-            dset.gen_rays(factor=factor)
-            dset.shuffle_rays()
+    if factor > 1:
+        print('* Using higher resolution images due to large grid; new factor', factor)
+        factor //= 2
+        dset.gen_rays(factor=factor)
+        dset.shuffle_rays()
 
     if gstep_id_base >= args.n_iters:
         print('* Final eval and save')
@@ -370,5 +369,5 @@ while True:
         timings_file = open(os.path.join(args.train_dir, 'time_mins.txt'), 'a')
         timings_file.write(f"{secs / 60}\n")
         if not args.tune_nosave:
-            grid.save(ckpt_path)
+            tree.save(ckpt_path)
         break

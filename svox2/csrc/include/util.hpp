@@ -1,5 +1,4 @@
 #pragma once
-
 // Changed from x.type().is_cuda() due to deprecation
 #define CHECK_CUDA(x) TORCH_CHECK(x.is_cuda(), #x " must be a CUDA tensor")
 #define CHECK_CPU(x) TORCH_CHECK(!x.is_cuda(), #x " must be a CPU tensor")
