@@ -1,5 +1,5 @@
 import unittest
-from opt.model import AdTree
+from model import AdTree
 import torch
 import svox
 

@@ -1,4 +1,3 @@
-import setuptools
 from setuptools import setup
 import os
 import os.path as osp
@@ -9,11 +8,11 @@ from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 ROOT_DIR = osp.dirname(osp.abspath(__file__))
 
 __version__ = None
-exec(open('svox2/version.py', 'r').read())
+exec(open('adsvox/version.py', 'r').read())
 
 CUDA_FLAGS = []
 INSTALL_REQUIREMENTS = []
-include_dirs = [osp.join(ROOT_DIR, "svox2", "csrc", "include")]
+include_dirs = [osp.join(ROOT_DIR, "adsvox", "csrc", "include")]
 
 # From PyTorch3D
 cub_home = os.environ.get("CUB_HOME", None)
@@ -36,15 +35,11 @@ else:
 
 try:
     ext_modules = [
-        CUDAExtension('svox2.csrc', [
-            'svox2/csrc/svox2.cpp',
-            'svox2/csrc/svox2_kernel.cu',
-            'svox2/csrc/render_lerp_kernel_cuvol.cu',
-            'svox2/csrc/render_lerp_kernel_nvol.cu',
-            'svox2/csrc/render_svox1_kernel.cu',
-            'svox2/csrc/misc_kernel.cu',
-            'svox2/csrc/loss_kernel.cu',
-            'svox2/csrc/optim_kernel.cu',
+        CUDAExtension('adsvox.csrc', [
+            'adsvox/csrc/adsvox.cpp',
+            'adsvox/csrc/kernel.cu',
+            'adsvox/csrc/rt_kernel.cu',
+            'adsvox/csrc/quantizer.cpp',
         ], include_dirs=include_dirs,
         optional=False),
     ]
@@ -54,7 +49,7 @@ except:
     ext_modules = []
 
 setup(
-    name='svox2',
+    name='adsvox',
     version=__version__,
     author='Haotian Bai',
     author_email='haotianwhite@outlook.com',
@@ -62,7 +57,7 @@ setup(
     url='https://github.com/164140757/AdaptiveNerf',
     ext_modules=ext_modules,
     setup_requires=['pybind11>=2.5.0'],
-    packages=['svox2', 'svox2.csrc'],
+    packages=['adsvox', 'adsvox.csrc'],
     cmdclass={'build_ext': BuildExtension},
     zip_safe=False,
 )

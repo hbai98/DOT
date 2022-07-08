@@ -11,7 +11,7 @@
 nvidia-smi
 
 module load anaconda3
-module load cuda-11.4
+module load cuda-11.3
 source activate
 conda activate Adnerf
 
@@ -21,7 +21,7 @@ CKPT_DIR=checkpoints/${experiment_name}
 data_dir=data/nerf_synthetic/drums
 mkdir -p $CKPT_DIR
 NOHUP_FILE=$CKPT_DIR/log
-echo Launching experiment ${experiment_name}
+echo Launching experiment ${expççççeriment_name}
 echo CKPT $CKPT_DIR
 echo LOGFILE $NOHUP_FILE
 

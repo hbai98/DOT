@@ -4,6 +4,7 @@
 module load cuda-11.4
 conda env create -f environment.yml
 conda activate Adnerf
+python -m pip install --upgrade pip
 pip install .
 
 cd svox 

@@ -7,7 +7,6 @@ import torch
 import torch.cuda
 import torch.optim
 import torch.nn.functional as F
-import svox2
 import svox
 import json
 import os
@@ -21,6 +20,7 @@ from util.dataset import datasets
 from util.util import  get_expon_lr_func, viridis_cmap
 from util import config_util
 from model import AdTree
+from model.render import VolumeRenderer
 
 from datetime import datetime
 from torch.utils.tensorboard import SummaryWriter
@@ -186,16 +186,16 @@ tree.requires_grad_(True)
 
 gstep_id_base = 0
 
-resample_cameras = [
-        svox2.Camera(c2w.to(device=device),
-                     dset.intrins.get('fx', i),
-                     dset.intrins.get('fy', i),
-                     dset.intrins.get('cx', i),
-                     dset.intrins.get('cy', i),
-                     width=dset.get_image_size(i)[1],
-                     height=dset.get_image_size(i)[0],
-                     ndc_coeffs=dset.ndc_coeffs) for i, c2w in enumerate(dset.c2w)
-    ]
+# resample_cameras = [
+#         svox2.Camera(c2w.to(device=device),
+#                      dset.intrins.get('fx', i),
+#                      dset.intrins.get('fy', i),
+#                      dset.intrins.get('cx', i),
+#                      dset.intrins.get('cy', i),
+#                      width=dset.get_image_size(i)[1],
+#                      height=dset.get_image_size(i)[0],
+#                      ndc_coeffs=dset.ndc_coeffs) for i, c2w in enumerate(dset.c2w)
+#     ]
 
 ckpt_path = path.join(args.train_dir, 'ckpt.npz')
 
@@ -210,10 +210,10 @@ lr_basis_factor = 1.0
 epoch_id = -1
 
 if 'llff' == args.dataset_type or path.isfile(path.join(args.data_dir, 'poses_bounds.npy')):
-    ndc_config = svox.NDCConfig(width=resample_cameras[0].width, height=resample_cameras[0].height, focal=dset.focal)
+    ndc_config = svox.NDCConfig(width=dset.get_image_size(0)[1], height=dset.get_image_size(0)[0], focal=dset.focal)
 else:
     ndc_config = None
-render = svox.VolumeRenderer(tree, step_size=args.renderer_step_size, ndc=ndc_config)
+render = VolumeRenderer(tree, step_size=args.renderer_step_size, ndc=ndc_config)
 
 while True:
     dset.shuffle_rays()
@@ -244,15 +244,7 @@ while True:
             n_images_gen = 0
             for i, img_id in tqdm(enumerate(img_ids), total=len(img_ids)):
                 c2w = dset_test.c2w[img_id].to(device=device)
-                cam = svox2.Camera(c2w,
-                                   dset_test.intrins.get('fx', img_id),
-                                   dset_test.intrins.get('fy', img_id),
-                                   dset_test.intrins.get('cx', img_id),
-                                   dset_test.intrins.get('cy', img_id),
-                                   width=dset_test.get_image_size(img_id)[1],
-                                   height=dset_test.get_image_size(img_id)[0],
-                                   ndc_coeffs=dset_test.ndc_coeffs)
-                rgb_pred_test = render.render_persp(c2w, height=cam.height, width=cam.width, fx=cam.fx_val, fast=False)
+                rgb_pred_test = render.render_persp(c2w, height=dset_test.get_image_size(img_id)[0], width=dset_test.get_image_size(img_id)[1], fx=dset_test.intrins.get('fx', img_id), fast=False)
                 rgb_gt_test = dset_test.gt[img_id].to(device=device)
                 all_mses = ((rgb_gt_test - rgb_pred_test) ** 2).cpu()
                 if i % img_save_interval == 0:
@@ -264,15 +256,15 @@ while True:
                         mse_img = all_mses / all_mses.max()
                         summary_writer.add_image(f'test/mse_map_{img_id:04d}',
                                 mse_img, global_step=gstep_id_base, dataformats='HWC')
-                    if args.log_depth_map:
-                        depth_img = tree.volume_render_depth_image(cam,
-                                    args.log_depth_map_use_thresh if
-                                    args.log_depth_map_use_thresh else None
-                                )
-                        depth_img = viridis_cmap(depth_img.cpu())
-                        summary_writer.add_image(f'test/depth_map_{img_id:04d}',
-                                depth_img,
-                                global_step=gstep_id_base, dataformats='HWC')
+                    # if args.log_depth_map:
+                    #     depth_img = tree.volume_render_depth_image(cam,
+                    #                 args.log_depth_map_use_thresh if
+                    #                 args.log_depth_map_use_thresh else None
+                    #             )
+                    #     depth_img = viridis_cmap(depth_img.cpu())
+                    #     summary_writer.add_image(f'test/depth_map_{img_id:04d}',
+                    #             depth_img,
+                    #             global_step=gstep_id_base, dataformats='HWC')
 
                 rgb_pred_test = rgb_gt_test = None
                 mse_num : float = all_mses.mean().item()
@@ -313,7 +305,11 @@ while True:
             rays = svox2.Rays(batch_origins, batch_dirs)
 
             # #  with Timing("volrend_fused"):
-            rgb_pred = render(rays, cuda=True, fast=False)
+            rgb_pred = tree.volume_render_fused(rays, rgb_gt,
+                    beta_loss=args.lambda_beta,
+                    sparsity_loss=args.lambda_sparsity,
+                    randomize=args.enable_random)
+
             #  with Timing("loss_comp"):
             mse = F.mse_loss(rgb_gt, rgb_pred)
 
@@ -340,9 +336,6 @@ while True:
                 if gstep_id >= 0:
                     tree.optim_density_step(lr_sigma, beta=args.rms_beta, optim=args.sigma_optim)
                     tree.optim_sh_step(lr_sh, beta=args.rms_beta, optim=args.sh_optim)
-
-
-
 
     train_step()
     gc.collect()
