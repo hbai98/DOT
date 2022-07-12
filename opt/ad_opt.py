@@ -19,7 +19,7 @@ import argparse
 from util.dataset import datasets
 from util.util import  get_expon_lr_func, viridis_cmap
 from util import config_util
-from model import AdTree
+from model import AdExternal_N3Tree
 from model.render import VolumeRenderer
 
 from datetime import datetime
@@ -173,9 +173,11 @@ global_start_time = datetime.now()
 # grid.sh_data.data[:] = 0.0
 # grid.density_data.data[:] = args.init_sigma
 
-tree = AdTree(data_dim=args.data_dim,
+adext = AdExternal_N3Tree(data_dim=args.data_dim,
               depth_limit=args.depth_limit,)
-tree.cuda()
+adext.cuda()
+
+tree = adext.tree
 
 lr_sigma = args.lr_sigma
 lr_sh = args.lr_sh
@@ -302,7 +304,7 @@ while True:
             batch_origins = dset.rays.origins[batch_begin: batch_end]
             batch_dirs = dset.rays.dirs[batch_begin: batch_end]
             rgb_gt = dset.rays.gt[batch_begin: batch_end]
-            rays = svox2.Rays(batch_origins, batch_dirs)
+            rays = Rays(batch_origins, batch_dirs)
 
             # #  with Timing("volrend_fused"):
             rgb_pred = tree.volume_render_fused(rays, rgb_gt,

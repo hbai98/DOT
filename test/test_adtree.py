@@ -1,12 +1,13 @@
 import unittest
-from model import AdTree
+from model import AdExternal_N3Tree
+from svox import VolumeRenderer
 import torch
 import svox
 
 class TestSvox(unittest.TestCase):
     # python -m unittest test.test_adtree.TestSvox
     def setUp(self) -> None:
-        self.t =AdTree(data_dim=32)
+        self.t =AdExternal_N3Tree(data_dim=32, device='cuda')
         return super().setUp()
     
     def test_modules(self):
@@ -15,19 +16,19 @@ class TestSvox(unittest.TestCase):
         # python -m unittest test.test_adtree.TestSvox.test_modules
     
     def test_encode_at(self):
-        self.t.expand_at(0, (0,0,1))
-        self.t.expand_at(0, (0,1,1))
+        self.t.tree._refine_at(0, (0,0,1))
+        self.t.tree._refine_at(0, (0,1,1))
         self.assertEqual(len(self.t.encode_at(1)), 32)
         self.assertEqual(len(self.t.encode_at(2)), 32)
         # python -m unittest test.test_adtree.TestSvox.test_encode_at
     
     def test_reverse_order_treeConv(self):
-        self.t.expand_at(0, (0,0,1))
-        self.t.expand_at(1, (0,0,1))
-        self.t.expand_at(0, (1,0,0))
-        self.t.expand_at(0, (1,1,0))
-        self.t.expand_at(1, (0,1,1))
-        self.t.expand_at(5, (0,1,1))
+        self.t.tree._refine_at(0, (0,0,1))
+        self.t.tree._refine_at(1, (0,0,1))
+        self.t.tree._refine_at(0, (1,0,0))
+        self.t.tree._refine_at(0, (1,1,0))
+        self.t.tree._refine_at(1, (0,1,1))
+        self.t.tree._refine_at(5, (0,1,1))
         
         gt = torch.tensor([
                         [5, 0, 1, 1],
@@ -46,46 +47,53 @@ class TestSvox(unittest.TestCase):
         # python -m unittest test.test_adtree.TestSvox.test_reverse_order_treeConv
 
     def test_encode(self):
-        self.t.expand_at(0, (0,0,1))
-        self.t.expand_at(1, (0,0,1))
-        self.t.expand_at(0, (1,0,0))
-        self.t.expand_at(0, (1,1,0))
-        self.t.expand_at(1, (0,1,1))
-        self.t.expand_at(5, (0,1,1))
-        features = self.t.encode()
-        self.assertTrue(features.size(), torch.Size([32]))
+        self.t.tree._refine_at(0, (0,0,1))
+        self.t.tree._refine_at(1, (0,0,1))
+        self.t.tree._refine_at(0, (1,0,0))
+        self.t.tree._refine_at(0, (1,1,0))
+        self.t.tree._refine_at(1, (0,1,1))
+        self.t.tree._refine_at(5, (0,1,1))
+        t_out = self.t.encode()
+        self.assertTrue(t_out.data.requires_grad)
+        self.assertTrue(self.t.tree.data.requires_grad)
+        self.assertEqual(t_out.data.size(), torch.Size([7, 2, 2, 2, 4]))
         # python -m unittest test.test_adtree.TestSvox.test_encode
     
     def test_init_gradient(self):
+        self.t.tree._refine_at(0, (0,0,1))
+        self.t.tree._refine_at(1, (0,0,1))
+        self.t.tree._refine_at(0, (1,0,0))
+        self.t.tree._refine_at(0, (1,1,0))
+        self.t.tree._refine_at(1, (0,1,1))
+        self.t.tree._refine_at(5, (0,1,1))
         self.t.cuda()
-        orig_data = self.t.data.clone()
-        
-        r = svox.VolumeRenderer(self.t)
 
-        target =  .2*torch.ones((1,31)).cuda()
-
+        target =  torch.tensor([[0.0, 1.0, 0.5]]).cuda()
         ray_ori = torch.tensor([[0.1, 0.1, -0.1]]).cuda()
         ray_dir = torch.tensor([[0.0, 0.0, 1.0]]).cuda()
         ray = svox.Rays(origins=ray_ori, dirs=ray_dir, viewdirs=ray_dir)
-
-        lr = 1e-2
+        
+        lr = 1e-1
 
         print('GRADIENT DESC')
 
-        for i in range(20):
-            rend = r(ray, cuda=True)
-            if i % 5 == 0:
-                print(rend.detach()[0].cpu().numpy())
-            ((rend - target) ** 2).sum().backward()
-            self.t.data.data -= lr * self.t.data.grad
-            self.t.zero_grad()
+        tree_out=self.t.encode()
+        print(tree_out.data.grad_fn)
+        # assert 0
+        r = VolumeRenderer(tree_out)
+        c2w = torch.tensor([[ -0.9999999403953552, 0.0, 0.0, 0.0 ],
+                    [ 0.0, -0.7341099977493286, 0.6790305972099304, 2.737260103225708 ],
+                    [ 0.0, 0.6790306568145752, 0.7341098785400391, 2.959291696548462 ],
+                    [ 0.0, 0.0, 0.0, 1.0 ],
+             ]).cuda()
         
-        print('TARGET')
-        print(target[0].cpu().numpy())
-        latest_data = self.t.data
+        im = r.render_persp(c2w, height=800, width=800, fx=1111.111).clamp_(0.0, 1.0)
+        im.sum().backward()
+        
+        print(im.grad_fn)
+        print(self.t.tree.data.grad)        
         
         print('Adtree')
-        print(self.t.data.requires_grad)
-        print(torch.abs(latest_data-orig_data))
+        print(self.t.tree.data.requires_grad)
         # python -m unittest test.test_adtree.TestSvox.test_init_gradient
         

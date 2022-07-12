@@ -31,15 +31,32 @@ from .utils import TreeConv, posenc
 from timm.models.layers import lecun_normal_, trunc_normal_
 from typing import Union, List
 from warnings import warn
-from adsvox.utils import _get_c_extension
+from adsvox.utils import _get_c_extension, N3TreeView, LocalIndex
 from adsvox import Rays
 from einops import rearrange
 from dataclasses import dataclass
 import numpy as np
+import math
 
 from typing import Optional
 _C = _get_c_extension()
+class _VolumeRenderFunction(autograd.Function):
+    @staticmethod
+    def forward(ctx, data, tree, rays, opt):
+        out = _C.volume_render(tree, rays, opt)
+        ctx.tree = tree
+        ctx.rays = rays
+        ctx.opt = opt
+        return out
 
+    @staticmethod
+    def backward(ctx, grad_out):
+        if ctx.needs_input_grad[0]:
+            return _C.volume_render_backward(
+                ctx.tree, ctx.rays, ctx.opt, grad_out.contiguous()
+            ), None, None, None
+        return None, None, None, None
+    
 @dataclass
 class RenderOptions:
     """
@@ -240,7 +257,7 @@ class AdTree(nn.Module):
             self.dict_convs[d] = TreeConv(data_dim, data_dim, N**3).to(device=device)
         self.head_sigma = Mlp(
             self.data_dim, self.data_dim*self.mlp_ratio, 1, drop=drop).to(device=device)
-        self.head_color = Mlp(self.data_dim, self.data_dim *
+        self.head_sh = Mlp(self.data_dim, self.data_dim *
                               self.mlp_ratio, 3, drop=drop).to(device=device)
 
         # self.background_nlayers = background_nlayers
@@ -604,13 +621,10 @@ class AdTree(nn.Module):
         
         return features, dirs_enc
         
-    def volume_render_fused(
+    def volume_render(
         self,
         rays: Rays,
-        rgb_gt: torch.Tensor,
-        randomize: bool = False,
-        beta_loss: float = 0.0,
-        sparsity_loss: float = 0.0
+        fast=False
     ):
         """
         Standard volume rendering with fused MSE gradient generation,
@@ -635,42 +649,46 @@ class AdTree(nn.Module):
         ), "CUDA extension is currently required for fused"
         assert rays.is_cuda
         grad_data, grad_bg = self._get_data_grads()
-        rgb_out = torch.zeros_like(rgb_gt)
         with torch.enable_grad():
             dir_enc, multi_scale_data = self._eval(rays) # basis_data [D] -> multi-scale features 
-            multi_scale_data += self.data
-            # inference color and sigma.
-            color = self.head_color(multi_scale_data)
+            multi_scale_data = self.data + multi_scale_data
+            # inference sh and sigma.
+            sh = self.head_sh(multi_scale_data)
             sigma = self.head_sigma(multi_scale_data)
-            
-        grad_color = torch.empty_like(color)
-        grad_sigma = torch.empty_like(sigma)
         
-        grad_holder = _C.TreeOutputGrads()
-        grad_holder.grad_color = grad_color
-        grad_holder.grad_sigma = grad_sigma
-        
-        if self.use_background:
-            grad_holder.grad_background_out = grad_bg
-            self.sparse_background_indexer = torch.zeros(list(self.background_data.shape[:-1]),
-                    dtype=torch.bool, device=self.background_data.device)
-            grad_holder.mask_background_out = self.sparse_background_indexer
-        
-        cu_fn = _C.__dict__[f"volume_render_{self.opt.backend}_fused"]
-        #  with utils.Timing("actual_render"):
-        cu_fn(
-            self._spec(replace_data=[color, sigma]),
+        rgb_out = _VolumeRenderFunction.apply(
+            self.data,
+            self._spec(replace_data=torch.cat()),
             rays._to_cpp(),
-            self.opt._to_cpp(randomize=randomize),
-            rgb_gt,
-            beta_loss,
-            sparsity_loss,
-            rgb_out,
-            grad_holder
-        )
-        # Manually trigger conv+MLP backward!
-        color.backward(grad_color)
-        sigma.backward(grad_sigma)
+            self._get_options(fast))
+        # grad_sh = torch.empty_like(sh)
+        # grad_sigma = torch.empty_like(sigma)
+        
+        # grad_holder = _C.TreeOutputGrads()
+        # grad_holder.grad_sh = grad_sh
+        # grad_holder.grad_sigma = grad_sigma
+        
+        # if self.use_background:
+        #     grad_holder.grad_background_out = grad_bg
+        #     self.sparse_background_indexer = torch.zeros(list(self.background_data.shape[:-1]),
+        #             dtype=torch.bool, device=self.background_data.device)
+        #     grad_holder.mask_background_out = self.sparse_background_indexer
+        
+        # cu_fn = _C.__dict__[f"volume_render_{self.opt.backend}_fused"]
+        # #  with utils.Timing("actual_render"):
+        # cu_fn(
+        #     self._spec(replace_data=torch.cat()),
+        #     rays._to_cpp(),
+        #     self.opt._to_cpp(randomize=randomize),
+        #     rgb_gt,
+        #     beta_loss,
+        #     sparsity_loss,
+        #     rgb_out,
+        #     grad_holder
+        # )
+        # # Manually trigger conv+MLP backward!
+        # sh.backward(grad_sh)
+        # sigma.backward(grad_sigma)
 
         return rgb_out    
     
@@ -758,6 +776,232 @@ class AdTree(nn.Module):
                             0, dtype=self.data.dtype, device=self.data.device)
             tree_spec._weight_accum_max = (self._weight_accum_op == 'max')
         return tree_spec    
+    def shrink_to_fit(self):
+            """
+            Shrink data & buffers to tightly needed fit tree data,
+            possibly dealing with fragmentation caused by merging.
+            This is called by the :code:`save()` function by default, unless
+            :code:`shrink=False` is specified there.
+
+            .. warning::
+                    Will change the nn.Parameter size (data), breaking optimizer!
+            """
+            if self._lock_tree_structure:
+                raise RuntimeError("Tree locked")
+            n_int = self.n_internal
+            n_free = self._n_free.item()
+            new_cap = n_int - n_free
+            if new_cap >= self.capacity:
+                return False
+            if n_free > 0:
+                # Defragment
+                free = self.parent_depth[:n_int, 0] == -1
+                csum = torch.cumsum(free, dim=0)
+
+                remain_ids = torch.arange(n_int, dtype=torch.long)[~free]
+                remain_parents = (*self._unpack_index(
+                    self.parent_depth[remain_ids, 0]).long().T,)
+
+                # Shift data over
+                par_shift = csum[remain_parents[0]]
+                self.child[remain_parents] -= csum[remain_ids] - par_shift
+                self.parent_depth[remain_ids, 0] -= par_shift * (self.N ** 3)
+
+                # Remake the data now
+                self.data = nn.Parameter(self.data.data[remain_ids])
+                self.child = self.child[remain_ids]
+                self.parent_depth = self.parent_depth[remain_ids]
+                self._n_internal.fill_(new_cap)
+                self._n_free.zero_()
+            else:
+                # Direct resize
+                self.data = nn.Parameter(self.data.data[:new_cap])
+                self.child = self.child[:new_cap]
+                self.parent_depth = self.parent_depth[:new_cap]
+            self._invalidate()
+            return True
+
+    # Misc
+    @property
+    def n_leaves(self):
+        return self._all_leaves().shape[0]
+
+    @property
+    def n_internal(self):
+        return self._n_internal.item()
+
+    @property
+    def capacity(self):
+        return self.parent_depth.shape[0]
+
+    @property
+    def max_depth(self):
+        """
+        Maximum tree depth - 1
+        """
+        return torch.max(self.depths).item()
+
+    def accumulate_weights(self, op : str='sum'):
+        """
+        Begin weight accumulation.
+
+        :param op: reduction to apply weight in each voxel,
+                   sum | max
+
+        .. warning::
+
+            Weight accumulator has not been validated
+            and may have bugs
+
+        :Example:
+
+        .. code-block:: python
+
+            with tree.accumulate_weights() as accum:
+                ...
+
+            # (n_leaves) in same order as values etc.
+            accum = accum()
+        """
+        return WeightAccumulator(self, op)
+
+    # Persistence
+    def save(self, path, shrink=True, compress=True):
+        """
+        Save to from npz file
+
+        :param path: npz path
+        :param shrink: if True (default), applies shrink_to_fit before saving
+        :param compress: whether to compress the npz; may be slow
+
+        """
+        if shrink:
+            self.shrink_to_fit()
+        data = {
+            "data_dim" : self.data_dim,
+            "child" : self.child.cpu(),
+            "parent_depth" : self.parent_depth.cpu(),
+            "n_internal" : self._n_internal.cpu().item(),
+            "n_free" : self._n_free.cpu().item(),
+            "invradius3" : self.invradius.cpu(),
+            "offset" : self.offset.cpu(),
+            "depth_limit": self.depth_limit,
+            "geom_resize_fact": self.geom_resize_fact,
+            "data": self.data.data.half().cpu().numpy()  # save CPU Memory
+        }
+        if self.data_format is not None:
+            data["data_format"] = repr(self.data_format)
+        if self.extra_data is not None:
+            data["extra_data"] = self.extra_data.cpu()
+        if compress:
+            np.savez_compressed(path, **data)
+        else:
+            np.savez(path, **data)
+
+    @classmethod
+    def from_grid(cls, grid, *args, **kwargs):
+        """
+        Construct from a grid
+
+        :param grid: (D, D, D, data_dim)
+
+        """
+        D = grid.shape[0]
+        assert grid.ndim == 4 and grid.shape[1] == D and grid.shape[2] == D, \
+               "Grid must be a 4D array with first 3 dims equal"
+        logD = int(math.log2(D))
+        assert 2**logD == D, "Grid size must be power of 2"
+        kwargs['init_refine'] = logD - 1
+        tree = cls(*args, **kwargs)
+        tree.set_grid(grid)
+        return tree
+
+    def set_grid(self, grid):
+        """
+        Set current tree to grid.
+        Assumes the tree's resolution is less than the grid's reslution
+
+        :param grid: (D, D, D, data_dim)
+
+        """
+        D = grid.shape[0]
+        assert grid.ndim == 4 and grid.shape[1] == D and \
+               grid.shape[2] == D and grid.shape[-1] == self.data_dim
+        idx = gen_grid(D).reshape(-1, 3)
+        self[LocalIndex(idx)] = grid.reshape(-1, self.data_dim)
+
+    @classmethod
+    def load(cls, path, device='cpu', dtype=torch.float32, map_location=None):
+        """
+        Load from npz file
+
+        :param path: npz path
+        :param device: str device to put data
+        :param dtype: str torch.float32 (default) | torch.float64
+        :param map_location: str DEPRECATED old name for device
+
+        """
+        if map_location is not None:
+            warn('map_location has been renamed to device and may be removed')
+            device = map_location
+        assert dtype == torch.float32 or dtype == torch.float64, 'Unsupported dtype'
+        tree = cls(dtype=dtype, device=device)
+        z = np.load(path)
+        tree.data_dim = int(z["data_dim"])
+        tree.child = torch.from_numpy(z["child"]).to(device)
+        tree.N = tree.child.shape[-1]
+        tree.parent_depth = torch.from_numpy(z["parent_depth"]).to(device)
+        tree._n_internal.fill_(z["n_internal"].item())
+        if "invradius3" in z.files:
+            tree.invradius = torch.from_numpy(z["invradius3"].astype(
+                                np.float32)).to(device)
+        else:
+            tree.invradius.fill_(z["invradius"].item())
+        tree.offset = torch.from_numpy(z["offset"].astype(np.float32)).to(device)
+        tree.depth_limit = int(z["depth_limit"])
+        tree.geom_resize_fact = float(z["geom_resize_fact"])
+        tree.data.data = torch.from_numpy(z["data"].astype(np.float32)).to(device)
+        if 'n_free' in z.files:
+            tree._n_free.fill_(z["n_free"].item())
+        else:
+            tree._n_free.zero_()
+        # tree.data_format = DataFormat(z['data_format'].item()) if \
+        #         'data_format' in z.files else None
+        tree.extra_data = torch.from_numpy(z['extra_data']).to(device) if \
+                          'extra_data' in z.files else None
+        return tree
+
+    # Magic
+    def __repr__(self):
+        return (f"svox.N3Tree(N={self.N}, data_dim={self.data_dim}, " +
+                f"depth_limit={self.depth_limit}, " +
+                f"capacity:{self.n_internal - self._n_free.item()}/{self.capacity}, " +
+                f"data_format:{self.data_format or 'RGBA'})");
+
+    def __getitem__(self, key):
+        """
+        Get N3TreeView
+        """
+        return N3TreeView(self, key)
+
+    def __setitem__(self, key, val):
+        N3TreeView(self, key).set(val)
+
+    def __iadd__(self, val):
+        self[:] += val
+        return self
+
+    def __isub__(self, val):
+        self[:] -= val
+        return self
+
+    def __imul__(self, val):
+        self[:] *= val
+        return self
+
+    def __idiv__(self, val):
+        self[:] /= val
+        return self
 
         
     # Misc
@@ -825,3 +1069,61 @@ def _init_Adtree_weights(module: nn.Module, name: str = '', head_bias: float = 0
         nn.init.zeros_(module.bias)
         nn.init.ones_(module.weight)
 
+# Redirect functions to N3TreeView so you can do tree.depths instead of tree[:].depths
+def _redirect_to_n3view():
+    redir_props = ['depths', 'lengths', 'lengths_local', 'corners', 'corners_local',
+                   'values', 'values_local']
+    redir_funcs = ['sample', 'sample_local', 'aux',
+            'normal_', 'clamp_', 'uniform_', 'relu_', 'sigmoid_', 'nan_to_num_']
+    def redirect_func(redir_func):
+        def redir_impl(self, *args, **kwargs):
+            return getattr(self[:], redir_func)(*args, **kwargs)
+        setattr(AdTree, redir_func, redir_impl)
+    for redir_func in redir_funcs:
+        redirect_func(redir_func)
+    def redirect_prop(redir_prop):
+        def redir_impl(self, *args, **kwargs):
+            return getattr(self[:], redir_prop)
+        setattr(AdTree, redir_prop, property(redir_impl))
+    for redir_prop in redir_props:
+        redirect_prop(redir_prop)
+_redirect_to_n3view()
+
+class WeightAccumulator():
+    def __init__(self, tree, op):
+        assert op in ['sum', 'max'], 'Unsupported accumulation'
+        self.tree = tree
+        self.op = op
+
+    def __enter__(self):
+        self.tree._lock_tree_structure = True
+        self.tree._weight_accum = torch.zeros(
+                self.tree.child.shape, dtype=self.tree.data.dtype,
+                device=self.tree.data.device)
+        self.tree._weight_accum_op = self.op
+        self.weight_accum = self.tree._weight_accum
+        return self
+
+    def __exit__(self, type, value, traceback):
+        self.tree._weight_accum = None
+        self.tree._weight_accum_op = None
+        self.tree._lock_tree_structure = False
+
+    @property
+    def value(self):
+        return self.weight_accum
+
+    def __call__(self):
+        return self.tree.aux(self.weight_accum)
+    
+def gen_grid(D):
+    """
+    Generate D^3 grid centers (coordinates in [0, 1]^3, xyz)
+
+    :param D: resolution
+    :return: (D, D, D, 3)
+    """
+    arr=(torch.arange(D) + 0.5) / D
+    X, Y, Z = torch.meshgrid(arr, arr, arr)
+    XYZ = torch.stack([X, Y, Z], -1)
+    return XYZ
