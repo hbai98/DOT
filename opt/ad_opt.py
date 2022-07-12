@@ -20,7 +20,7 @@ from util.dataset import datasets
 from util.util import  get_expon_lr_func, viridis_cmap
 from util import config_util
 from model import AdExternal_N3Tree
-from model.render import VolumeRenderer
+from svox import Rays, VolumeRenderer
 
 from datetime import datetime
 from torch.utils.tensorboard import SummaryWriter
@@ -174,7 +174,7 @@ global_start_time = datetime.now()
 # grid.density_data.data[:] = args.init_sigma
 
 adext = AdExternal_N3Tree(data_dim=args.data_dim,
-              depth_limit=args.depth_limit,)
+              depth_limit=args.depth_limit, init_refine=5)
 adext.cuda()
 
 tree = adext.tree
@@ -201,13 +201,14 @@ gstep_id_base = 0
 
 ckpt_path = path.join(args.train_dir, 'ckpt.npz')
 
-lr_sigma_func = get_expon_lr_func(args.lr_sigma, args.lr_sigma_final, args.lr_sigma_delay_steps,
-                                  args.lr_sigma_delay_mult, args.lr_sigma_decay_steps)
-lr_data_func = get_expon_lr_func(args.lr_sh, args.lr_sh_final, args.lr_sh_delay_steps,
-                               args.lr_sh_delay_mult, args.lr_sh_decay_steps)
+# lr_sigma_func = get_expon_lr_func(args.lr_sigma, args.lr_sigma_final, args.lr_sigma_delay_steps,
+#                                   args.lr_sigma_delay_mult, args.lr_sigma_decay_steps)
+# lr_data_func = get_expon_lr_func(args.lr_sh, args.lr_sh_final, args.lr_sh_delay_steps,
+#                                args.lr_sh_delay_mult, args.lr_sh_decay_steps)
 lr_sigma_factor = 1.0
 lr_sh_factor = 1.0
 lr_basis_factor = 1.0
+optim = torch.optim.Adam(adext.parameters(), lr=args.lr_basis)
 
 epoch_id = -1
 
@@ -215,7 +216,6 @@ if 'llff' == args.dataset_type or path.isfile(path.join(args.data_dir, 'poses_bo
     ndc_config = svox.NDCConfig(width=dset.get_image_size(0)[1], height=dset.get_image_size(0)[0], focal=dset.focal)
 else:
     ndc_config = None
-render = VolumeRenderer(tree, step_size=args.renderer_step_size, ndc=ndc_config)
 
 while True:
     dset.shuffle_rays()
@@ -246,6 +246,7 @@ while True:
             n_images_gen = 0
             for i, img_id in tqdm(enumerate(img_ids), total=len(img_ids)):
                 c2w = dset_test.c2w[img_id].to(device=device)
+                render = VolumeRenderer(adext.encode(), step_size=args.renderer_step_size, ndc=ndc_config)
                 rgb_pred_test = render.render_persp(c2w, height=dset_test.get_image_size(img_id)[0], width=dset_test.get_image_size(img_id)[1], fx=dset_test.intrins.get('fx', img_id), fast=False)
                 rgb_gt_test = dset_test.gt[img_id].to(device=device)
                 all_mses = ((rgb_gt_test - rgb_pred_test) ** 2).cpu()
@@ -297,20 +298,17 @@ while True:
         stats = {"mse" : 0.0, "psnr" : 0.0, "invsqr_mse" : 0.0}
         for iter_id, batch_begin in pbar:
             gstep_id = iter_id + gstep_id_base
-            lr_sigma = lr_sigma_func(gstep_id) * lr_sigma_factor
-            lr_sh = lr_data_func(gstep_id) * lr_sh_factor
+            # lr_sigma = lr_sigma_func(gstep_id) * lr_sigma_factor
+            # lr_sh = lr_data_func(gstep_id) * lr_sh_factor
 
             batch_end = min(batch_begin + args.batch_size, epoch_size)
             batch_origins = dset.rays.origins[batch_begin: batch_end]
             batch_dirs = dset.rays.dirs[batch_begin: batch_end]
             rgb_gt = dset.rays.gt[batch_begin: batch_end]
-            rays = Rays(batch_origins, batch_dirs)
-
+            rays = Rays(batch_origins, batch_dirs, batch_dirs/torch.norm(batch_dirs, dim=-1, keepdim=True))
             # #  with Timing("volrend_fused"):
-            rgb_pred = tree.volume_render_fused(rays, rgb_gt,
-                    beta_loss=args.lambda_beta,
-                    sparsity_loss=args.lambda_sparsity,
-                    randomize=args.enable_random)
+            render = VolumeRenderer(adext.encode(), step_size=args.renderer_step_size, ndc=ndc_config)
+            rgb_pred = render(rays, cuda=True)
 
             #  with Timing("loss_comp"):
             mse = F.mse_loss(rgb_gt, rgb_pred)
@@ -329,16 +327,14 @@ while True:
                     stat_val = stats[stat_name] / args.print_every
                     summary_writer.add_scalar(stat_name, stat_val, global_step=gstep_id)
                     stats[stat_name] = 0.0
-                
-                summary_writer.add_scalar("lr_sh", lr_sh, global_step=gstep_id)
-                summary_writer.add_scalar("lr_sigma", lr_sigma, global_step=gstep_id)
+                summary_writer.add_scalar("depth/weight_1", adext.depth_weight, global_step=gstep_id)
 
- 
-
-                if gstep_id >= 0:
-                    tree.optim_density_step(lr_sigma, beta=args.rms_beta, optim=args.sigma_optim)
-                    tree.optim_sh_step(lr_sh, beta=args.rms_beta, optim=args.sh_optim)
-
+                # if gstep_id >= 0:
+                #     tree.optim_density_step(lr_sigma, beta=args.rms_beta, optim=args.sigma_optim)
+                #     tree.optim_sh_step(lr_sh, beta=args.rms_beta, optim=args.sh_optim)
+            if gstep_id >= args.lr_basis_begin_step:
+                optim.step()
+                optim.zero_grad()                
     train_step()
     gc.collect()
     gstep_id_base += batches_per_epoch
