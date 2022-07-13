@@ -28,7 +28,7 @@ from .dataset_base import DatasetBase
 from .load_llff import load_llff_data
 from typing import Union, Optional
 
-from svox2.utils import convert_to_ndc
+from util.util import convert_to_ndc
 
 class LLFFDataset(DatasetBase):
     """

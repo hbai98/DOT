@@ -62,7 +62,9 @@ group.add_argument('--lambda_beta', type=float, default=
                     0.0,
                     help="Weight for beta distribution sparsity loss as in neural volumes")
 
-
+group.add_argument('--lr_basis', type=float, default=#2e6,
+                      1e-6,
+                   help='SGD/rmsprop lr for SH')
 group = parser.add_argument_group("optimization")
 group.add_argument('--n_iters', type=int, default=2 * 12800, help='total number of iters to optimize for')
 group.add_argument('--batch_size', type=int, default=
@@ -70,7 +72,7 @@ group.add_argument('--batch_size', type=int, default=
                      #100000,
                      #  2000,
                    help='batch size')
-
+group.add_argument('--lr_basis_begin_step', type=int, default=0)
 
 # TODO: make the lr higher near the end
 group.add_argument('--sigma_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Density optimizer")
@@ -174,7 +176,7 @@ global_start_time = datetime.now()
 # grid.density_data.data[:] = args.init_sigma
 
 adext = AdExternal_N3Tree(data_dim=args.data_dim,
-              depth_limit=args.depth_limit, init_refine=5)
+              depth_limit=args.depth_limit, init_refine=4)
 adext.cuda()
 
 tree = adext.tree
@@ -312,7 +314,6 @@ while True:
 
             #  with Timing("loss_comp"):
             mse = F.mse_loss(rgb_gt, rgb_pred)
-
             # Stats
             mse_num : float = mse.detach().item()
             psnr = -10.0 * math.log10(mse_num)
@@ -327,14 +328,18 @@ while True:
                     stat_val = stats[stat_name] / args.print_every
                     summary_writer.add_scalar(stat_name, stat_val, global_step=gstep_id)
                     stats[stat_name] = 0.0
-                summary_writer.add_scalar("depth/weight_1", adext.depth_weight, global_step=gstep_id)
+                    
+            for i in range(adext.depth_limit):
+                summary_writer.add_scalar(f"depth/weight_{i}", adext.depth_weight[i].detach().cpu(), global_step=gstep_id)
 
                 # if gstep_id >= 0:
                 #     tree.optim_density_step(lr_sigma, beta=args.rms_beta, optim=args.sigma_optim)
                 #     tree.optim_sh_step(lr_sh, beta=args.rms_beta, optim=args.sh_optim)
             if gstep_id >= args.lr_basis_begin_step:
-                optim.step()
                 optim.zero_grad()                
+                mse.backward()
+                optim.step()
+                
     train_step()
     gc.collect()
     gstep_id_base += batches_per_epoch

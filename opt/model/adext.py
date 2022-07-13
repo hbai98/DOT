@@ -8,7 +8,6 @@ from timm.models.layers import Mlp
 from timm.models.layers import lecun_normal_, trunc_normal_
 from einops import rearrange
 from svox.helpers import DataFormat, _get_c_extension, LocalIndex
-from torch import autograd
 from warnings import warn
 
 _C = _get_c_extension()
@@ -75,7 +74,8 @@ class AdExternal_N3Tree(nn.Module):
         self.mlp_ratio = mlp_ratio
         self.dict_convs = {}
         for d in range(depth_limit):
-            self.dict_convs[d] = TreeConv(data_dim, data_dim, self.N**3).to(device=device)
+            self.dict_convs[str(d)] = TreeConv(data_dim, data_dim, self.N**3).to(device=device)
+        self.dict_convs = nn.ModuleDict(self.dict_convs)
         self.head_sigma = Mlp(
             self.data_dim, self.data_dim*self.mlp_ratio, 1, drop=drop).to(device=device)
         self.head_f = Mlp(self.data_dim, self.data_dim *
@@ -105,7 +105,7 @@ class AdExternal_N3Tree(nn.Module):
         
         data = rearrange(self.tree.data[intnode_idx], 'N1 N2 N3 D -> D (N1 N2 N3)')
         depth = self.tree.parent_depth[intnode_idx]
-        conv = self.dict_convs[depth[1].item()]
+        conv = self.dict_convs[str(depth[1].item())]
         
         return conv(data)
     
@@ -135,10 +135,9 @@ class AdExternal_N3Tree(nn.Module):
             features += self.depth_weight[depth]*feature
         
         # revise the tree's leaf nodes for rendering
-        self.tree += features
         # the internal nodes will be skipped by the rendering algorithm. 
         # Note: leaf nodes are accessed by t[:]
-        features = self.tree[:]
+        features = self.tree[:] + features
         _f = self.head_f(features)
         f_ = self.head_sigma(features)
         leaf_data = torch.cat((_f, f_), dim=1)

@@ -1,5 +1,5 @@
 import unittest
-from model import AdExternal_N3Tree
+from opt.model import AdExternal_N3Tree
 from svox import VolumeRenderer
 import torch
 import svox
@@ -11,8 +11,11 @@ class TestSvox(unittest.TestCase):
         return super().setUp()
     
     def test_modules(self):
-        for m in self.t.modules():
-            print(m)
+        # for m in self.t.modules():
+        #     print(m)
+        for k,v in self.t.named_parameters():
+            if v.requires_grad:
+                print(k)    
         # python -m unittest test.test_adtree.TestSvox.test_modules
     
     def test_encode_at(self):
@@ -81,19 +84,24 @@ class TestSvox(unittest.TestCase):
         print(tree_out.data.grad_fn)
         # assert 0
         r = VolumeRenderer(tree_out)
-        c2w = torch.tensor([[ -0.9999999403953552, 0.0, 0.0, 0.0 ],
-                    [ 0.0, -0.7341099977493286, 0.6790305972099304, 2.737260103225708 ],
-                    [ 0.0, 0.6790306568145752, 0.7341098785400391, 2.959291696548462 ],
-                    [ 0.0, 0.0, 0.0, 1.0 ],
-             ]).cuda()
+        res = r(ray, cuda=True)
+        print(res.grad_fn)
+        res.sum().backward()
         
-        im = r.render_persp(c2w, height=800, width=800, fx=1111.111).clamp_(0.0, 1.0)
-        im.sum().backward()
+        # c2w = torch.tensor([[ -0.9999999403953552, 0.0, 0.0, 0.0 ],
+        #             [ 0.0, -0.7341099977493286, 0.6790305972099304, 2.737260103225708 ],
+        #             [ 0.0, 0.6790306568145752, 0.7341098785400391, 2.959291696548462 ],
+        #             [ 0.0, 0.0, 0.0, 1.0 ],
+        #      ]).cuda()
         
-        print(im.grad_fn)
-        print(self.t.tree.data.grad)        
+        # im = r.render_persp(c2w, height=800, width=800, fx=1111.111).clamp_(0.0, 1.0)
+        # im.sum().backward()
         
-        print('Adtree')
+        # print(im.grad_fn)
+        # print(self.t.tree.data.grad)        
+        print(self.t.depth_weight.grad)
+        print(self.t.head_f.fc1.weight.grad)
+        print(self.t.dict_convs['1'].conv.weight.grad)
         print(self.t.tree.data.requires_grad)
         # python -m unittest test.test_adtree.TestSvox.test_init_gradient
         
