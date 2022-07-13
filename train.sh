@@ -1,7 +1,7 @@
 #!/bin/sh		
 #BSUB -J nerf
 #BSUB -n 4     
-#BSUB -m g-node02
+#BSUB -m g-node04
 #BSUB -q gpu         
 #BSUB -gpgpu 1
 #BSUB -o out.%J      

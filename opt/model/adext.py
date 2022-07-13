@@ -9,6 +9,7 @@ from timm.models.layers import lecun_normal_, trunc_normal_
 from einops import rearrange
 from svox.helpers import DataFormat, _get_c_extension, LocalIndex
 from warnings import warn
+from torch.nn.functional import gumbel_softmax
 
 _C = _get_c_extension()
 
@@ -18,23 +19,7 @@ def _rays_spec_from_rays(rays):
     spec.dirs = rays.dirs
     spec.vdirs = rays.viewdirs
     return spec
-
-# class _AdRenderAutugradFunction(autograd.Function):
-#     @staticmethod
-#     def forward(ctx, tree, rays, opt):
-#         out = _C.volume_render(tree, rays, opt)
-#         ctx.tree = tree
-#         ctx.rays = rays
-#         ctx.opt = opt
-#         return out
-    
-#     @staticmethod
-#     def backward(ctx, grad_out_data_to_render):   
-#         if ctx.needs_input_grad[0]:
-#             return _C.volume_render_backward(
-#                 ctx.tree, ctx.rays, ctx.opt, grad_out_data_to_render.contiguous()
-#             ), None, None, None
-#         return None, None, None, None         
+       
 
         
 class AdExternal_N3Tree(nn.Module):
@@ -83,14 +68,6 @@ class AdExternal_N3Tree(nn.Module):
         self.new_data_dim = self.data_format.data_dim
         self.init_weights()
         
-    # def forward(self, rays : Rays, cuda=True, fast=False):
-
-    #     with torch.enable_grad():
-    #         return _AdRenderAutugradFunction.apply(
-    #             self.tree._spec(self.data_to_render),
-    #             _rays_spec_from_rays(rays),
-    #             self._get_options(fast)            
-    #         )        
     def init_weights(self):
         nn.init.normal_(self.tree.data)
         self.apply(_init_Adtree_weights)
@@ -113,13 +90,10 @@ class AdExternal_N3Tree(nn.Module):
         """
         Advanced: Encode features of the entire tree by the Treeconv operation.
         The convolution is a recursive process that starts from the deepest layer to the top.
-        """   
-        B = self.tree.data.size(0)
-        N = self.N
-        device = self.tree.data.device
-        new_data_dim = self.new_data_dim
-        dtype = self.tree.data.dtype
         
+        Return:
+
+        """   
         # encode
         depth, indexes = torch.sort(self.tree.parent_depth, dim=0, descending=True)
         features = torch.zeros(self.tree.data_dim, device=self.device)
@@ -141,39 +115,19 @@ class AdExternal_N3Tree(nn.Module):
         _f = self.head_f(features)
         f_ = self.head_sigma(features)
         leaf_data = torch.cat((_f, f_), dim=1)
+        return leaf_data
+    
+    
+    def out_tree(self, leaf_data):
+        B = self.tree.data.size(0)
+        device = self.tree.data.device
         leaf_idx = self.tree._all_leaves()
         leaf_idx = self.tree._pack_index(leaf_idx)
+        
         # prepare OUT tree 
-        # t_out = N3Tree(N=self.N, data_dim=new_data_dim,
-        #         data_format=str(self.data_format),
-        #         depth_limit=self.depth_limit,
-        #         geom_resize_fact=self.tree.geom_resize_fact,
-        #         dtype=dtype,
-        #         device=device
-        # )
-        
-        # def copy_to_device(x):
-        #     return torch.empty(x.shape, dtype=x.dtype, device=device).copy_(x)
-        # t_out.invradius = copy_to_device(self.tree.invradius)
-        # t_out.offset = copy_to_device(self.tree.offset)
-        # t_out.child = copy_to_device(self.tree.child)
-        # t_out.parent_depth = copy_to_device(self.tree.parent_depth)
-        # t_out._n_internal = copy_to_device(self.tree._n_internal)
-        # t_out._n_free = copy_to_device(self.tree._n_free)
-        
-        # if self.tree.extra_data is not None:
-        #     t_out.extra_data = copy_to_device(self.tree.extra_data)
-        # else:
-        #     t_out.extra_data = None   
         t_out = self.tree.partial()
         t_out.expand(self.data_format_txt, data_dim=self.new_data_dim)
-        # render = VR(t_out)
-        # target =  torch.tensor([[0.0, 1.0, 0.5]]).cuda()
-        # ray_ori = torch.tensor([[0.1, 0.1, -0.1]]).cuda()
-        # ray_dir = torch.tensor([[0.0, 0.0, 1.0]]).cuda()
-        # ray = Rays(origins=ray_ori, dirs=ray_dir, viewdirs=ray_dir)
-        # print(render(ray, cuda=True))
-
+        
         size_ = t_out.data.shape
         data = torch.zeros(size_, device=device)
         B, N1, N2, N3, D = data.size()
@@ -182,6 +136,8 @@ class AdExternal_N3Tree(nn.Module):
         del t_out.data
         t_out.data = rearrange(data, '(B N1 N2 N3) D ->B N1 N2 N3 D', B=B, N1=N1, N2=N2, N3=N3)
         return t_out
+    
+    
                    
     def get_parent_intnode(self, idx):
         """Get the internode's parent node idx.
@@ -200,6 +156,33 @@ class AdExternal_N3Tree(nn.Module):
             return res[0]
         else:
             return -1
+    
+    def expand_grad(self, grad, k=5):
+        """The adaptive sampling based on greedy gradient based selection. 
+        We expand the tree based on max(|dMSE/dc|). 
+        This operation is only feasible whene data.grad is availabel and the current depth <= depth_limit. return signal True.
+        If depth > depth_limit, the operation stops, and return signal False.
+        """
+        assert self.tree.data.grad is not None, 'The grad is needed for adaptive selection. '
+        
+        # grad = self.tree.data.grad.clone()
+        leaf_idx = self.tree._all_leaves()
+        leaf_idx = self.tree._pack_index(leaf_idx) 
+        grad = rearrange(grad, 'B N1 N2 N3 D -> (B N1 N2 N3) D')
+        grad = grad[leaf_idx] 
+        grad = grad.sum(dim=-1)
+        _, node_idx = torch.topk(grad, k=k)
+        idxes = leaf_idx[node_idx]
+        
+        for idx in idxes:
+            intnode_idx, xi, yi, zi = self.tree._unpack_index(idx)
+            if self.tree.parent_depth[intnode_idx, 1] >= self.depth_limit:
+                continue
+            # expand
+            flag = self.tree._refine_at(intnode_idx, (xi, yi, zi))
+            break
+        return flag
+        
 
 def _init_Adtree_weights(module: nn.Module, name: str = '', head_bias: float = 0., jax_impl: bool = False):
     if isinstance(module, nn.Linear):

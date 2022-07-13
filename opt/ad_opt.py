@@ -63,12 +63,12 @@ group.add_argument('--lambda_beta', type=float, default=
                     help="Weight for beta distribution sparsity loss as in neural volumes")
 
 group.add_argument('--lr_basis', type=float, default=#2e6,
-                      1e-6,
+                      1e3,
                    help='SGD/rmsprop lr for SH')
 group = parser.add_argument_group("optimization")
-group.add_argument('--n_iters', type=int, default=2 * 12800, help='total number of iters to optimize for')
+group.add_argument('--n_iters', type=int, default=50 * 12800, help='total number of iters to optimize for')
 group.add_argument('--batch_size', type=int, default=
-                     5000,
+                     10000,
                      #100000,
                      #  2000,
                    help='batch size')
@@ -83,8 +83,11 @@ group.add_argument('--lr_sigma_delay_steps', type=int, default=15000,
                    help="Reverse cosine steps (0 means disable)")
 group.add_argument('--lr_sigma_delay_mult', type=float, default=1e-2)#1e-4)#1e-4)
 group.add_argument('--sh_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="SH optimizer")
-group.add_argument('--lr_sh', type=float, default=
-                    1e-2,
+group.add_argument('--lr_enc', type=float, default=
+                    1e-5,
+                   help='SGD/rmsprop lr for SH')
+group.add_argument('--lr_data', type=float, default=
+                    1e2,
                    help='SGD/rmsprop lr for SH')
 group.add_argument('--lr_sh_final', type=float,
                       default=
@@ -98,6 +101,7 @@ group.add_argument('--lr_fg_begin_step', type=int, default=0, help="Foreground b
 group.add_argument('--rms_beta', type=float, default=0.95, help="RMSProp exponential averaging factor")
 
 group.add_argument('--print_every', type=int, default=20, help='print every')
+group.add_argument('--new_sample_every', type=int, default=1600, help='Add sample every interation')
 group.add_argument('--save_every', type=int, default=5,
                    help='save every x epochs')
 group.add_argument('--eval_every', type=int, default=1,
@@ -176,13 +180,13 @@ global_start_time = datetime.now()
 # grid.density_data.data[:] = args.init_sigma
 
 adext = AdExternal_N3Tree(data_dim=args.data_dim,
-              depth_limit=args.depth_limit, init_refine=4)
+              depth_limit=args.depth_limit, init_refine=1)
 adext.cuda()
 
 tree = adext.tree
 
 lr_sigma = args.lr_sigma
-lr_sh = args.lr_sh
+# lr_sh = args.lr_sh
 
 tree.requires_grad_(True)
 # setup_render_opts(grid.opt, args)
@@ -210,7 +214,15 @@ ckpt_path = path.join(args.train_dir, 'ckpt.npz')
 lr_sigma_factor = 1.0
 lr_sh_factor = 1.0
 lr_basis_factor = 1.0
-optim = torch.optim.Adam(adext.parameters(), lr=args.lr_basis)
+# print(dict(adext.named_parameters()).keys())
+enc_param = []
+
+for k, v in adext.named_parameters():
+    if k == 'tree.data':
+        optim_data = torch.optim.Adam([v], lr=args.lr_data)
+    else:
+        enc_param.append(v)
+optim_enc = torch.optim.Adam(enc_param, lr=args.lr_basis)
 
 epoch_id = -1
 
@@ -218,19 +230,22 @@ if 'llff' == args.dataset_type or path.isfile(path.join(args.data_dir, 'poses_bo
     ndc_config = svox.NDCConfig(width=dset.get_image_size(0)[1], height=dset.get_image_size(0)[0], focal=dset.focal)
 else:
     ndc_config = None
-
 while True:
     dset.shuffle_rays()
     epoch_id += 1
     epoch_size = dset.rays.origins.size(0)
     batches_per_epoch = (epoch_size-1)//args.batch_size+1
+
     # Test
     def eval_step():
+        leaf_val = adext.encode()
+        out_tree = adext.out_tree(leaf_val)
+        render = VolumeRenderer(out_tree, step_size=args.renderer_step_size, ndc=ndc_config)
         # Put in a function to avoid memory leak
         print('Eval step')
         with torch.no_grad():
             stats_test = {'psnr' : 0.0, 'mse' : 0.0}
-
+            
             # Standard set
             N_IMGS_TO_EVAL = min(20 if epoch_id > 0 else 5, dset_test.n_images)
             N_IMGS_TO_SAVE = N_IMGS_TO_EVAL # if not args.tune_mode else 1
@@ -248,7 +263,6 @@ while True:
             n_images_gen = 0
             for i, img_id in tqdm(enumerate(img_ids), total=len(img_ids)):
                 c2w = dset_test.c2w[img_id].to(device=device)
-                render = VolumeRenderer(adext.encode(), step_size=args.renderer_step_size, ndc=ndc_config)
                 rgb_pred_test = render.render_persp(c2w, height=dset_test.get_image_size(img_id)[0], width=dset_test.get_image_size(img_id)[1], fx=dset_test.intrins.get('fx', img_id), fast=False)
                 rgb_gt_test = dset_test.gt[img_id].to(device=device)
                 all_mses = ((rgb_gt_test - rgb_pred_test) ** 2).cpu()
@@ -289,6 +303,7 @@ while True:
                         stats_test[stat_name], global_step=gstep_id_base)
             summary_writer.add_scalar('epoch_id', float(epoch_id), global_step=gstep_id_base)
             print('eval stats:', stats_test)
+            
     if epoch_id % max(factor, args.eval_every) == 0: #and (epoch_id > 0 or not args.tune_mode):
         # NOTE: we do an eval sanity check, if not in tune_mode
         eval_step()
@@ -298,20 +313,23 @@ while True:
         print('Train step')
         pbar = tqdm(enumerate(range(0, epoch_size, args.batch_size)), total=batches_per_epoch)
         stats = {"mse" : 0.0, "psnr" : 0.0, "invsqr_mse" : 0.0}
+        grad_total = torch.zeros(tree.data.shape, device=device)
         for iter_id, batch_begin in pbar:
             gstep_id = iter_id + gstep_id_base
             # lr_sigma = lr_sigma_func(gstep_id) * lr_sigma_factor
             # lr_sh = lr_data_func(gstep_id) * lr_sh_factor
-
+            leaf_val = adext.encode()
+            out_tree = adext.out_tree(leaf_val)
+            render = VolumeRenderer(out_tree, step_size=args.renderer_step_size, ndc=ndc_config)
+            
             batch_end = min(batch_begin + args.batch_size, epoch_size)
             batch_origins = dset.rays.origins[batch_begin: batch_end]
             batch_dirs = dset.rays.dirs[batch_begin: batch_end]
             rgb_gt = dset.rays.gt[batch_begin: batch_end]
             rays = Rays(batch_origins, batch_dirs, batch_dirs/torch.norm(batch_dirs, dim=-1, keepdim=True))
             # #  with Timing("volrend_fused"):
-            render = VolumeRenderer(adext.encode(), step_size=args.renderer_step_size, ndc=ndc_config)
+            
             rgb_pred = render(rays, cuda=True)
-
             #  with Timing("loss_comp"):
             mse = F.mse_loss(rgb_gt, rgb_pred)
             # Stats
@@ -324,22 +342,32 @@ while True:
             if (iter_id + 1) % args.print_every == 0:
                 # Print averaged stats
                 pbar.set_description(f'epoch {epoch_id} psnr={psnr:.2f}')
-                for stat_name in stats:
-                    stat_val = stats[stat_name] / args.print_every
-                    summary_writer.add_scalar(stat_name, stat_val, global_step=gstep_id)
-                    stats[stat_name] = 0.0
                     
-            for i in range(adext.depth_limit):
-                summary_writer.add_scalar(f"depth/weight_{i}", adext.depth_weight[i].detach().cpu(), global_step=gstep_id)
-
                 # if gstep_id >= 0:
                 #     tree.optim_density_step(lr_sigma, beta=args.rms_beta, optim=args.sigma_optim)
                 #     tree.optim_sh_step(lr_sh, beta=args.rms_beta, optim=args.sh_optim)
-            if gstep_id >= args.lr_basis_begin_step:
-                optim.zero_grad()                
-                mse.backward()
-                optim.step()
+            for i in range(adext.depth_limit):
+                weight = adext.depth_weight[i].detach().cpu()
+                ratio = weight/ adext.depth_weight.sum().detach().cpu()
+                summary_writer.add_scalar(f"depth/weight_{i}", ratio, global_step=gstep_id) 
+                    
+            for stat_name in stats:
+                stat_val = stats[stat_name] / args.print_every
+                summary_writer.add_scalar(stat_name, stat_val, global_step=gstep_id)
+                stats[stat_name] = 0.0        
                 
+            if gstep_id >= args.lr_basis_begin_step:
+                optim_data.zero_grad()   
+                optim_enc.zero_grad()             
+                mse.backward()
+                grad_total += tree.data.grad
+                optim_data.step()   
+                optim_enc.step()  
+                
+        if adext.expand_grad(grad_total):
+            pbar.set_description(f'sample a new node. {tree}')  
+            grad_total = torch.zeros(tree.data.shape, device=device)        
+
     train_step()
     gc.collect()
     gstep_id_base += batches_per_epoch
@@ -349,8 +377,7 @@ while True:
         print('Saving', ckpt_path)
         tree.save(ckpt_path)
 
-    # TODO: ADD adaptive sampling 
-
+    
     if factor > 1:
         print('* Using higher resolution images due to large grid; new factor', factor)
         factor //= 2

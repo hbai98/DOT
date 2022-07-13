@@ -1,4 +1,3 @@
 {
-    "lr_sigma": 3e1,
-    "lr_sh": 1e-2
+    "lr_sigma": 3e1
 }

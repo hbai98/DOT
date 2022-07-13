@@ -80,7 +80,8 @@ class TestSvox(unittest.TestCase):
 
         print('GRADIENT DESC')
 
-        tree_out=self.t.encode()
+        leaf_val=self.t.encode()
+        tree_out = self.t.out_tree(leaf_val)
         print(tree_out.data.grad_fn)
         # assert 0
         r = VolumeRenderer(tree_out)
@@ -102,6 +103,28 @@ class TestSvox(unittest.TestCase):
         print(self.t.depth_weight.grad)
         print(self.t.head_f.fc1.weight.grad)
         print(self.t.dict_convs['1'].conv.weight.grad)
-        print(self.t.tree.data.requires_grad)
+        print(self.t.tree.data.grad)
         # python -m unittest test.test_adtree.TestSvox.test_init_gradient
         
+    def test_expand_grad(self):
+        self.t.tree._refine_at(0, (0,0,1))
+        self.t.tree._refine_at(1, (0,0,1))
+        self.t.tree._refine_at(0, (1,0,0))
+        self.t.tree._refine_at(0, (1,1,0))
+        self.t.tree._refine_at(1, (0,1,1))
+        self.t.tree._refine_at(5, (0,1,1))
+        self.t.cuda()        
+        
+        target =  torch.tensor([[0.0, 1.0, 0.5]]).cuda()
+        ray_ori = torch.tensor([[0.1, 0.1, -0.1]]).cuda()
+        ray_dir = torch.tensor([[0.0, 0.0, 1.0]]).cuda()
+        ray = svox.Rays(origins=ray_ori, dirs=ray_dir, viewdirs=ray_dir)  
+
+        leaf_val=self.t.encode()
+        tree_out = self.t.out_tree(leaf_val)
+        r = VolumeRenderer(tree_out)      
+        res = r(ray, cuda=True)
+        res.sum().backward()
+        
+        self.t.expand_grad()
+        # python -m unittest test.test_adtree.TestSvox.test_expand_grad
