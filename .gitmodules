@@ -4,3 +4,6 @@
 [submodule "svox2"]
 	path = svox2
 	url = https://github.com/sxyu/svox2.git
+[submodule "references/references/MCTS"]
+	path = references/references/MCTS
+	url = https://github.com/pbsinclair42/MCTS.git
