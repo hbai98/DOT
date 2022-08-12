@@ -1,7 +1,7 @@
 #!/bin/sh		
 #BSUB -J nerf
 #BSUB -n 4     
-#BSUB -m g-node04
+#BSUB -m g-node02
 #BSUB -q gpu         
 #BSUB -gpgpu 1
 #BSUB -o out.%J      
@@ -15,7 +15,7 @@ module load cuda-11.4
 source activate
 conda activate Adnerf
 
-experiment_name=orig/o2
+experiment_name=orig/mlp
 config=opt/configs/syn.json
 CKPT_DIR=checkpoints/${experiment_name}
 data_dir=data/nerf_synthetic/drums

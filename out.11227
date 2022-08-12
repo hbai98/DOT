@@ -1,0 +1,90 @@
++ '[' x2 '!=' x ']'
+++ nvidia-smi -q -i 2
+++ awk -F: '{print $2 }'
+++ xargs
+++ grep 'Process ID'
++ usedProcessIds=
++ exit 0
+Mon Jul 18 11:52:23 2022       
++-----------------------------------------------------------------------------+
+| NVIDIA-SMI 470.82.01    Driver Version: 470.82.01    CUDA Version: 11.4     |
+|-------------------------------+----------------------+----------------------+
+| GPU  Name        Persistence-M| Bus-Id        Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp  Perf  Pwr:Usage/Cap|         Memory-Usage | GPU-Util  Compute M. |
+|                               |                      |               MIG M. |
+|===============================+======================+======================|
+|   0  NVIDIA A30          Off  | 00000000:0C:00.0 Off |                    0 |
+| N/A   65C    P0   148W / 165W |  23753MiB / 24258MiB |    100%      Default |
+|                               |                      |             Disabled |
++-------------------------------+----------------------+----------------------+
+|   1  NVIDIA A30          Off  | 00000000:0D:00.0 Off |                    0 |
+| N/A   59C    P0   151W / 165W |  20178MiB / 24258MiB |     69%      Default |
+|                               |                      |             Disabled |
++-------------------------------+----------------------+----------------------+
+|   2  NVIDIA A30          Off  | 00000000:10:00.0 Off |                    0 |
+| N/A   25C    P0    31W / 165W |     27MiB / 24258MiB |      4%      Default |
+|                               |                      |             Disabled |
++-------------------------------+----------------------+----------------------+
+|   3  NVIDIA A30          Off  | 00000000:15:00.0 Off |                    0 |
+| N/A   25C    P0    32W / 165W |  20016MiB / 24258MiB |      6%      Default |
+|                               |                      |             Disabled |
++-------------------------------+----------------------+----------------------+
+|   4  NVIDIA A30          Off  | 00000000:16:00.0 Off |                    0 |
+| N/A   24C    P0    29W / 165W |      3MiB / 24258MiB |      0%      Default |
+|                               |                      |             Disabled |
++-------------------------------+----------------------+----------------------+
+|   5  NVIDIA A30          Off  | 00000000:19:00.0 Off |                    0 |
+| N/A   24C    P0    28W / 165W |      7MiB / 24258MiB |      0%      Default |
+|                               |                      |             Disabled |
++-------------------------------+----------------------+----------------------+
+|   6  NVIDIA A30          Off  | 00000000:1D:00.0 Off |                    0 |
+| N/A   25C    P0    30W / 165W |     42MiB / 24258MiB |      0%      Default |
+|                               |                      |             Disabled |
++-------------------------------+----------------------+----------------------+
+|   7  NVIDIA A30          Off  | 00000000:25:00.0 Off |                    0 |
+| N/A   24C    P0    29W / 165W |      3MiB / 24258MiB |      0%      Default |
+|                               |                      |             Disabled |
++-------------------------------+----------------------+----------------------+
+                                                                               
++-----------------------------------------------------------------------------+
+| Processes:                                                                  |
+|  GPU   GI   CI        PID   Type   Process name                  GPU Memory |
+|        ID   ID                                                   Usage      |
+|=============================================================================|
+|    0   N/A  N/A   1758190      C   python                          20149MiB |
+|    0   N/A  N/A   1992855      C   python                           3599MiB |
+|    1   N/A  N/A   1765878      C   python                          20175MiB |
++-----------------------------------------------------------------------------+
+Launching experiment
+CKPT checkpoints/orig/conv
+LOGFILE checkpoints/orig/conv/log
+DETACH
+
+Sender: Unischeduler System <CONNECT.haotianbai@mgt02>
+Subject: Job 11227: </hpc/users/CONNECT/haotianbai/.jhjobs/1658116449.11227.1.shell> Done
+
+Job </hpc/users/CONNECT/haotianbai/.jhjobs/1658116449.11227.1.shell> was submitted from host <mgt02> by user <CONNECT.haotianbai>.
+Job was executed on host(s) <4*g-node02>, in queue <gpu>, as user <CONNECT.haotianbai>.
+</hpc/users/CONNECT/haotianbai> was used as the home directory.
+</hpc/users/CONNECT/haotianbai/work_dir/AdaptiveNerf> was used as the working directory.
+Started at 2022-07-18 11:52:20
+Results reported at 2022-07-19 07:48:51
+
+Your job looked like:
+
+------------------------------------------------------------
+# User input
+/hpc/users/CONNECT/haotianbai/.jhjobs/1658116449.11227.1.shell
+------------------------------------------------------------
+
+Successfully completed.
+
+Resource usage summary:
+
+    CPU time   :        74462.51 sec.
+    Max Memory :             34043 MB
+    Max Processes  :               3
+
+
+The output (if any) follows:
+

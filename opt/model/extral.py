@@ -71,6 +71,7 @@ class AdExternal_N3Tree(nn.Module):
     def init_weights(self):
         nn.init.normal_(self.tree.data)
         self.apply(_init_Adtree_weights)
+    
         
     def encode_at(self, intnode_idx):
         """
@@ -86,7 +87,7 @@ class AdExternal_N3Tree(nn.Module):
         
         return conv(data)
     
-    def encode(self):
+    def encode(self, conv=True):
         """
         Advanced: Encode features of the entire tree by the Treeconv operation.
         The convolution is a recursive process that starts from the deepest layer to the top.
@@ -94,49 +95,57 @@ class AdExternal_N3Tree(nn.Module):
         Return:
 
         """   
-        # encode
-        depth, indexes = torch.sort(self.tree.parent_depth, dim=0, descending=True)
-        features = torch.zeros(self.tree.data_dim, device=self.device)
         
-        for d in depth:
-            idx = d[0]
-            depth = d[1]
-            xyzi = self.tree._unpack_index(idx)
-            intnode_idx, xi, yi, zi = xyzi
-            feature = self.encode_at(intnode_idx)
-            # revise the internal node's data
-            self.tree.data.data[intnode_idx, xi, yi, zi] = feature
-            features += self.depth_weight[depth]*feature
+        # encode
+        
         
         # revise the tree's leaf nodes for rendering
         # the internal nodes will be skipped by the rendering algorithm. 
         # Note: leaf nodes are accessed by t[:]
-        features = self.tree[:] + features
+        
+        idx = self.tree._all_leaves().T
+        leaf_data = self.tree.data[idx[0], idx[1], idx[2], idx[3], :] # [B D]
+        
+        if conv:
+            depth, indexes = torch.sort(self.tree.parent_depth, dim=0, descending=True)
+            features = torch.zeros(self.tree.data_dim, device=self.device)
+            for d in depth:
+                idx_ = d[0]
+                depth = d[1]
+                xyzi = self.tree._unpack_index(idx_)
+                intnode_idx, xi, yi, zi = xyzi
+                feature = self.encode_at(intnode_idx)
+                # revise the internal node's data
+                self.tree.data.data[intnode_idx, xi, yi, zi] = feature
+                features += self.depth_weight[depth]*feature
+            # features = rearrange(features, 'D -> 1 1 1 1 D') + leaf_data
+            features = rearrange(features, 'D -> 1 D') + leaf_data
+        else:
+            features = leaf_data
+        
+        # B, N1, N2, N3, D = features.size()
+        # features = rearrange(features, 'B N1 N2 N3 D -> (B N1 N2 N3) D')
         _f = self.head_f(features)
         f_ = self.head_sigma(features)
         leaf_data = torch.cat((_f, f_), dim=1)
-        return leaf_data
-    
-    
-    def out_tree(self, leaf_data):
-        B = self.tree.data.size(0)
-        device = self.tree.data.device
-        leaf_idx = self.tree._all_leaves()
-        leaf_idx = self.tree._pack_index(leaf_idx)
+        # leaf_data = rearrange(leaf_data, '(B N1 N2 N3) D -> B N1 N2 N3 D', B=B, N1=N1, N2=N2, N3=N3)
         
+        device = self.tree.data.device
         # prepare OUT tree 
         t_out = self.tree.partial()
         t_out.expand(self.data_format_txt, data_dim=self.new_data_dim)
-        
-        size_ = t_out.data.shape
-        data = torch.zeros(size_, device=device)
-        B, N1, N2, N3, D = data.size()
-        data = rearrange(data, 'B N1 N2 N3 D -> (B N1 N2 N3) D')
-        data[leaf_idx] = leaf_data
+        data = torch.zeros(t_out.data.shape, device=device)
+        data[idx[0], idx[1], idx[2], idx[3], :] = leaf_data
         del t_out.data
-        t_out.data = rearrange(data, '(B N1 N2 N3) D ->B N1 N2 N3 D', B=B, N1=N1, N2=N2, N3=N3)
+        t_out.data = data
+        # t_out[:].values.sum().backward()
+        # t_out.data.sum().backward()
+        # print(self.dict_convs['0'].conv.weight.grad)
+        # print(self.head_f.fc1.weight.grad)
+        # print(self.tree.data.grad)      
+        # assert(0) 
         return t_out
-    
+
     
                    
     def get_parent_intnode(self, idx):
@@ -183,6 +192,7 @@ class AdExternal_N3Tree(nn.Module):
             break
         return flag
         
+
 
 def _init_Adtree_weights(module: nn.Module, name: str = '', head_bias: float = 0., jax_impl: bool = False):
     if isinstance(module, nn.Linear):

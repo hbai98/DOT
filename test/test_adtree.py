@@ -42,10 +42,10 @@ class TestSvox(unittest.TestCase):
                         [0, 0, 0, 1],
                         [0, 0, 0, 0]
                           ], dtype=torch.int32)        
-        depth, indexes = torch.sort(self.t.parent_depth, dim=0, descending=True)
+        depth, indexes = torch.sort(self.t.tree.parent_depth, dim=0, descending=True)
         for i, d in enumerate(depth):
             idx = d[0]
-            xyzi = self.t._unpack_index(idx)
+            xyzi = self.t.tree._unpack_index(idx)
             self.assertTrue(torch.equal(xyzi, gt[i]))
         # python -m unittest test.test_adtree.TestSvox.test_reverse_order_treeConv
 
@@ -57,9 +57,8 @@ class TestSvox(unittest.TestCase):
         self.t.tree._refine_at(1, (0,1,1))
         self.t.tree._refine_at(5, (0,1,1))
         t_out = self.t.encode()
-        self.assertTrue(t_out.data.requires_grad)
+        self.assertTrue(t_out.requires_grad)
         self.assertTrue(self.t.tree.data.requires_grad)
-        self.assertEqual(t_out.data.size(), torch.Size([7, 2, 2, 2, 4]))
         # python -m unittest test.test_adtree.TestSvox.test_encode
     
     def test_init_gradient(self):
@@ -120,11 +119,11 @@ class TestSvox(unittest.TestCase):
         ray_dir = torch.tensor([[0.0, 0.0, 1.0]]).cuda()
         ray = svox.Rays(origins=ray_ori, dirs=ray_dir, viewdirs=ray_dir)  
 
-        leaf_val=self.t.encode()
-        tree_out = self.t.out_tree(leaf_val)
+        tree_out=self.t.encode()
         r = VolumeRenderer(tree_out)      
         res = r(ray, cuda=True)
         res.sum().backward()
-        
-        self.t.expand_grad()
+        print(tree_out.data.grad)
+        print(self.t.tree.data.grad)
+        # self.t.expand_grad(self.t.tree.data.grad)
         # python -m unittest test.test_adtree.TestSvox.test_expand_grad
