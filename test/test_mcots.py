@@ -11,12 +11,14 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from einops import rearrange
+from torch.utils.tensorboard import SummaryWriter
 
 class TestMCOTS(unittest.TestCase):
     # python -m unittest test.test_mcots.TestMCOTS
     def setUp(self) -> None:
         self.dset = datasets["auto"](datadir, split='train')
-        self.mcots = mcots(0.5, [0.5, 0.5, 0.5], 1e-5, device="cuda")
+        self.writer = SummaryWriter('/hpc/users/CONNECT/haotianbai/work_dir/AdaptiveNerf/checkpoints/mcots')
+        self.mcots = mcots(0.5, [0.5, 0.5, 0.5], 1e-5, device="cuda", writer=self.writer)
         self.rays = self.dset.rays
         directions = self.rays.dirs
         norms = np.linalg.norm(directions, axis=-1, keepdims=True)
@@ -70,5 +72,22 @@ class TestMCOTS(unittest.TestCase):
         print(t1.data[0,0,0,1])
         print(t1.n_internal)
         # python -m unittest test.test_mcots.TestMCOTS.test_copyfromPlayer
+    
+    def test_gt(self):
+        from torchvision.utils import save_image
+        save_image(rearrange(self.gt[0], 'H W C -> C H W'), 'test.png')
+        # python -m unittest test.test_mcots.TestMCOTS.test_gt
         
+    def test_run_a_round(self):
+        print(self.mcots.player)
         
+        self.mcots.run_a_round(self.rays, self.gt, 0)
+        
+        print(self.mcots.player)
+        # print(self.mcots.player.parent_depth)
+        print(self.mcots.player.child)
+        print(self.mcots.recorder.num_visits)
+        # python -m unittest test.test_mcots.TestMCOTS.test_run_a_round
+    
+    def test_run(self):
+        pass

@@ -493,7 +493,7 @@ while True:
             batch_dirs = dset.rays.dirs[batch_begin: batch_end]
             rgb_gt = dset.rays.gt[batch_begin: batch_end]
             rays = svox2.Rays(batch_origins, batch_dirs)
-
+            
             #  with Timing("volrend_fused"):
             rgb_pred = grid.volume_render_fused(rays, rgb_gt,
                     beta_loss=args.lambda_beta,
@@ -534,7 +534,6 @@ while True:
                 if grid.use_background:
                     summary_writer.add_scalar("lr_sigma_bg", lr_sigma_bg, global_step=gstep_id)
                     summary_writer.add_scalar("lr_color_bg", lr_color_bg, global_step=gstep_id)
-
                 if args.weight_decay_sh < 1.0:
                     grid.sh_data.data *= args.weight_decay_sigma
                 if args.weight_decay_sigma < 1.0:

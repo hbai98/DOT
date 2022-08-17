@@ -5,15 +5,22 @@ from svox.helpers import  DataFormat
 from warnings import warn
 from einops import rearrange
 import torch.nn.functional as F
+from tqdm import tqdm
+from svox import Rays
+import math
+import gc
+
 class SMCT(N3Tree):
     def __init__(self, record=True, N=2, data_dim=None, depth_limit=10,
             init_reserve=1, init_refine=0, geom_resize_fact=1.0,
             radius=0.5, center=[0.5, 0.5, 0.5],
+            lr=1e-2, 
             data_format="SH9",
             extra_data=None,
             device="cpu",
             dtype=torch.float32,
-            map_location=None):
+            map_location=None
+            ):
         """
         Construct N^3 Tree: spatial mento carlo tree
         :param pre_data: torch.Tensor, the previous record of data. if None, the data is registered 
@@ -72,6 +79,8 @@ class SMCT(N3Tree):
             self.register_parameter("data",
                 nn.Parameter(torch.empty(init_reserve, N, N, N, self.data_dim, dtype=dtype, device=device)))
             nn.init.constant_(self.data, 0.01)
+            self.opt = torch.optim.Adam(self.parameters(), lr=lr)
+            
         self.register_buffer("child", torch.zeros(
             init_reserve, N, N, N, dtype=torch.int32, device=device))
         self.register_buffer("parent_depth", torch.zeros(
@@ -104,7 +113,10 @@ class SMCT(N3Tree):
         self._weight_accum_op = None
 
         self.refine(repeats=init_refine)
-        
+    
+    def get_depth(self):
+        return torch.max(self.parent_depth[:, 1])
+    
     def _unpack_index(self, flat):
         t = []
         for i in range(3):
@@ -152,6 +164,8 @@ class SMCT(N3Tree):
                                 torch.zeros((cap_needed, *self.parent_depth.shape[1:]),
                                    dtype=self.parent_depth.dtype,
                                    device=self.data.device)))
+                
+            
   
     def _refine_at(self, intnode_idx, xyzi):
         """
@@ -198,6 +212,7 @@ class mcots(nn.Module):
                  radius,
                  center,
                  step_size,
+                 epoch_round=5,
                  num_round=50, 
                  data_dim=None,
                  explore_exploit=2.,
@@ -205,6 +220,7 @@ class mcots(nn.Module):
                  device="cpu",
                  data_format="SH9",
                  dtype=torch.float32,
+                 writer=None
                  ):
         """Main mcts based octree data structure
 
@@ -238,13 +254,16 @@ class mcots(nn.Module):
         self.dtype = dtype
         n_nodes = self.recorder.n_internal
         N = self.recorder.N
-        self.explor_exploit = explore_exploit
+        self.explore_exploit = explore_exploit
         self.player = None
         self.instant_reward = None
+        self.epoch_round = epoch_round
+        self.round=0
+        self.writer = writer
         
         self.init_player(device)
         
-    def select(self):
+    def select(self, idx):
         """Deep first search based on policy value: from root to the tail
         
         weights: shape-> [n, N, N, N] leaf nodes
@@ -258,7 +277,8 @@ class mcots(nn.Module):
         r_idx = 0
         
         p_val = self.policy_puct() # leaf
-        
+        self.writer.add_scalar(f'train/avg_p_val', p_val.mean(), idx)    
+            
         while p_p != 0:
             idx_ = torch.argmax(p_val[p_idx])
             _, u, v, z = self.recorder._unpack_index(idx_)
@@ -269,44 +289,100 @@ class mcots(nn.Module):
             p_idx += p_p                            
             r_idx += p_r
             
-        return [p_idx,u,v,z], r_idx, p_r
+        return p_idx, r_idx, [u, v, z]
         
-    def getReward(self, rays, cuda=True, fast=False):
+    def getReward(self, rays, gt, cuda=True, fast=False):
+        
         render = VolumeRenderer(self.player, step_size=self.step_size)
-        with self.player.accumulate_weights(op="sum") as accum:
-            res = render.forward(rays, cuda=cuda, fast=fast)
-        val = accum.value
-        val /= val.sum()
-        return res, val
-    
-    
-    def expand(self, pos, r_idx, p_r):
-        # pos -> player leaf
-        n, u, v, z = pos
+        total_rays = rays.origins.size(0)
+        B, H, W, C = gt.shape
+        batch_size = H*W*2
+        gt = rearrange(gt, 'B H W C -> (B H W) C')
+        device = self.player.data.device
         
-        self.player._refine_at(n, (u, v, z))
+        for _ in range(self.epoch_round):
+            # shuffle rays and gts
+            indexer = torch.randperm(total_rays)
+            rays = Rays(rays.origins[indexer], rays.dirs[indexer], rays.viewdirs[indexer])
+            gt = gt[indexer]
+            pbar = enumerate(range(0, total_rays,batch_size))
+            
+            mse = torch.zeros(1, device=device)
+            stats = {"mse" : 0.0, "psnr" : 0.0, "invsqr_mse" : 0.0}
+            vals = torch.zeros(self.player.child.size(), device=device)
+            for iter_id, batch_begin in pbar:
+                batch_end = min(batch_begin + batch_size, total_rays)
+                batch_origins = rays.origins[batch_begin: batch_end]
+                batch_dirs = rays.dirs[batch_begin: batch_end]
+                batch_viewdir = rays.viewdirs[batch_begin: batch_end]
+                rgb_gt = gt[batch_begin:batch_end]
+                ray = Rays(batch_origins, batch_dirs, batch_viewdir)
+                
+                with self.player.accumulate_weights(op="sum") as accum:
+                    res = render.forward(ray, cuda=cuda, fast=fast)
+                    
+                val = accum.value
+                val /= val.sum()
+        
+                vals += val
+                mse += F.mse_loss(rgb_gt, res)
+                # Stats
+                mse_num : float = mse.detach().item()
+                psnr = -10.0 * math.log10(mse_num)
+                stats['mse'] += mse_num
+                stats['psnr'] += psnr
+                stats['invsqr_mse'] += 1.0 / mse_num ** 2
+                
+            self.player.opt.zero_grad()
+            mse.backward()
+            self.player.opt.step()
+        
+        self._instant_reward(vals, mse)
+        return stats
+    
+    def expand(self, p_idx, r_idx, uvz):
+        # pos -> player leaf
+        u, v, z = uvz
+        p_r = self.recorder.child[r_idx, u, v, z]
+        res = self.player._refine_at(p_idx, (u, v, z))
+        
         if p_r == 0:
-            self.player.data[-1] += self.player.data[n, u, v, z]
+            self.player.data[-1].data += self.player.data[p_idx, u, v, z].clone()
+            self.recorder._refine_at(r_idx, (u, v, z))
         # copy physical properties clone from recorder
         else:
-            self.player.data[-1] += self.recorder.data[r_idx].to(self.player.data.device)
+            self.player.data[-1].data += self.recorder.data[r_idx].to(self.player.data.device)
+        return res
     
-    def run_a_round(self, rays, gt):
-        B, H, W, _ = gt.shape 
-        # stimulate
-        res, weights = self.getReward(rays)
-        res = rearrange(res, '(B H W) C -> B H W C', B=B, H=H)
-        mse = F.mse_loss(gt, res)
-        ## update the player based on mse
-        mse.backward()
-        # save the reward and record it at the end of the game rounds
-        self._instant_reward(weights, mse)
-        # select
-        pos, r_idx, p_r = self.select()
-        # expand
-        self.expand(pos, r_idx, p_r)
-        
-        
+    def run_a_round(self, rays, gt, idx):
+        res = True
+        with tqdm(total=self.player.depth_limit) as pbar:
+            log = False
+            while res:
+                idx +=1
+                # stimulate
+                stats = self.getReward(rays, gt)
+                depth = self.player.get_depth()
+                # select
+                p_idx, r_idx, uvz = self.select(idx)
+                # expand
+                res = self.expand(p_idx, r_idx, uvz)
+                # log 
+                delta_depth =(self.player.get_depth()-depth).item()
+                for k, v in stats.items():
+                    self.writer.add_scalar(f'train/{k}', v, idx)
+                if delta_depth!=0:
+                    render = VolumeRenderer(self.player, step_size=self.step_size)
+                    B, H, W, C = gt.shape
+                    id_ = H*W
+                    ray = Rays(rays.origins[:id_], rays.dirs[:id_], rays.viewdirs[:id_])
+                    im = rearrange(render.forward(ray), '(H W) C -> H W C', H=H)
+                    self.writer.add_image(f'train/round_{self.round}_depth_{depth}',im, idx, dataformats='HWC')
+                    
+                pbar.update(delta_depth)
+                gc.collect()
+                    
+                
 
     def _instant_reward(self, weights, mse):
         instant_reward = weights*torch.exp(-mse)
@@ -344,9 +420,9 @@ class mcots(nn.Module):
         """
         instant_reward = self.instant_reward
         device = instant_reward.device
-        total_reward = self.total_reward.to(device)
-        num_visits = self.num_visits.to(device)
-        return total_reward+self.explor_exploit*instant_reward/(1+num_visits)
+        total_reward = self.recorder.total_reward.to(device)
+        num_visits = self.recorder.num_visits.to(device)
+        return total_reward+self.explore_exploit*instant_reward/(1+num_visits)
     
     def copyFromPlayer(self):
         p_c = self.player.child.to('cpu')

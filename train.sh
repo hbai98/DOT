@@ -25,7 +25,7 @@ echo Launching experiment ${expriment_name}
 echo CKPT $CKPT_DIR
 echo LOGFILE $NOHUP_FILE
 
-python opt/ad_opt.py -t $CKPT_DIR ${data_dir} -c ${config} > $NOHUP_FILE 2>&1  
+python opt/opt.py -t $CKPT_DIR ${data_dir} -c ${config} > $NOHUP_FILE 2>&1  
 echo DETACH
 
 # dataset='office_home'

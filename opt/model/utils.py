@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch
 from typing import Optional
 import numpy as np
+from typing import Union
 
 class TreeConv(nn.Module):
     def __init__(self, in_channels, out_channels, degree, act='gelu', inplace=True):
@@ -105,3 +106,4 @@ def posenc(
     if include_identity:
         four_feat = torch.cat([x] + [four_feat], dim=-1)
     return four_feat
+
