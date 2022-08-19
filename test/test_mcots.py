@@ -88,7 +88,7 @@ class TestMCOTS(unittest.TestCase):
         print(self.mcots.player)
         # print(self.mcots.player.parent_depth)
         print(self.mcots.player.child)
-        print(self.mcots.recorder.num_visits)
+        print(self.mcots.num_visits)
         # python -m unittest test.test_mcots.TestMCOTS.test_run_a_round
     
     def test_run(self):

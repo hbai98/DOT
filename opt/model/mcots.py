@@ -379,9 +379,10 @@ class mcots(nn.Module):
         
         delta_init = 5e-4
         delta_end = 5e-7
+        delta_decay_steps = 25000
         
         delta_func = get_expon_func(delta_init, delta_end, lr_basis_delay_steps,
-                                    lr_basis_delay_mult, lr_basis_decay_steps)   
+                                    lr_basis_delay_mult, delta_decay_steps)   
         
         
         self.writer.add_scalar(f'train/num_nodes', self.player.n_leaves, self.gstep_id)
@@ -409,7 +410,8 @@ class mcots(nn.Module):
                     ray = Rays(rays.origins[:id_], rays.dirs[:id_], rays.viewdirs[:id_])
                     im = rearrange(render.forward(ray), '(H W) C -> H W C', H=H)
                     self.writer.add_image(f'train/round_{self.round}_depth_{depth}',im, self.gstep_id, dataformats='HWC')
-                    
+                    # print(self.instant_visits)
+                    # print(self.num_visits)
                 pbar.update(delta_depth)
                 gc.collect()
                     
@@ -424,9 +426,12 @@ class mcots(nn.Module):
         # change the num visits to upper bounds 
         total_visits = torch.zeros(self.player.n_internal, N, N, N, device=self.player.data.device)
         
+        # the root node is also [0, 0] so it should not be recorded
+        total_reward[0] = instant_reward[0]
+        
         for d in depth:
             idx_ = d[0]
-            depth = d[1]
+            depth_ = d[1]
 
             # internal node
             xyzi = self.player._unpack_index(idx_)    
@@ -435,16 +440,15 @@ class mcots(nn.Module):
             ins_rewards = instant_reward[n_]
             ins_visits = self.num_visits[n_]
             # the root node idx is not recorded!
-            if depth != 0:
+            if depth_ != 0:
                 total_reward[n, x, y, z] += ins_rewards.sum()
                 total_visits[n, x, y, z] += ins_visits.sum()
             # leaf_nodes
             total_reward[n_] += ins_rewards
             total_visits[n_] += ins_visits
-            
         self.instant_reward = total_reward
         self.instant_visits = total_visits
-        
+            
     def policy_puct(self):
         """Return the policy head value to guide the sampling
 
@@ -457,7 +461,7 @@ class mcots(nn.Module):
         Returns:
             p-uct value
         """
-        return self.instant_reward/(1+self.instant_visits)
+        return self.instant_reward/torch.exp((1+self.instant_visits))
     
         
     def optim_basis_step(self, lr: float, beta: float=0.9, epsilon: float = 1e-8,
