@@ -15,12 +15,12 @@ import numpy as np
 _C = _get_c_extension()
 
 class SMCT(N3Tree):
-    def __init__(self, record=True, N=2, data_dim=None, depth_limit=10,
+    def __init__(self, N=2, data_dim=None, depth_limit=20,
             init_reserve=1, init_refine=0, geom_resize_fact=1.0,
             radius=0.5, center=[0.5, 0.5, 0.5],
             data_format="SH9",
             extra_data=None,
-            device="cpu",
+            device="cuda",
             dtype=torch.float32,
             map_location=None
             ):
@@ -69,19 +69,10 @@ class SMCT(N3Tree):
         if init_refine > 0:
             for i in range(1, init_refine + 1):
                 init_reserve += (N ** i) ** 3
-        self.record = record
-        # the data is used for recording purpose only 
-        if record:
-            device="cpu"
-            self.register_buffer("data",
-                torch.zeros(init_reserve, N, N, N, self.data_dim, dtype=dtype, device=device))
-            # the reward and n_visits for mcst
-            self.register_buffer("num_visits", torch.zeros(init_reserve, N, N, N, dtype=torch.int32, device=device))
-            self.register_buffer("total_reward", torch.zeros(init_reserve, N, N, N, dtype=dtype, device=device)) 
-        else:
-            self.register_parameter("data",
-                nn.Parameter(torch.empty(init_reserve, N, N, N, self.data_dim, dtype=dtype, device=device)))
-            nn.init.constant_(self.data, 0.01)
+
+        self.register_parameter("data",
+            nn.Parameter(torch.empty(init_reserve, N, N, N, self.data_dim, dtype=dtype, device=device)))
+        nn.init.constant_(self.data, 0.01)
             
         self.register_buffer("child", torch.zeros(
             init_reserve, N, N, N, dtype=torch.int32, device=device))
@@ -136,27 +127,11 @@ class SMCT(N3Tree):
         if may_oom:
             # Potential OOM prevention hack
             self.data = nn.Parameter(self.data.cpu())
-        # recorder
-        if self.record:
-            self.data = torch.cat((self.data.data,
-                            torch.zeros((cap_needed, *self.data.data.shape[1:]),
-                                    dtype=self.data.dtype,
-                                    device=self.data.device)), dim=0)         
-            self.num_visits = torch.cat((self.num_visits,
-                                        torch.zeros((cap_needed, *self.num_visits.shape[1:]),
-                                        dtype=self.num_visits.dtype,
-                                        device=self.num_visits.device)
-                                        ))
-            self.total_reward = torch.cat((self.total_reward,
-                                        torch.zeros((cap_needed, *self.total_reward.shape[1:]),
-                                        dtype=self.total_reward.dtype,
-                                        device=self.total_reward.device)
-                                        ))     
-        else:
-            self.data = nn.Parameter(torch.cat((self.data.data,
-                            torch.zeros((cap_needed, *self.data.data.shape[1:]),
-                                    dtype=self.data.dtype,
-                                    device=self.data.device)), dim=0))
+
+        self.data = nn.Parameter(torch.cat((self.data.data,
+                        torch.zeros((cap_needed, *self.data.data.shape[1:]),
+                                dtype=self.data.dtype,
+                                device=self.data.device)), dim=0))
         if may_oom:
             self.data = nn.Parameter(self.data.to(device=self.child.device))
         self.child = torch.cat((self.child,
@@ -245,30 +220,31 @@ class mcots(nn.Module):
         self.radius = radius
         self.center = center
         self.data_format = data_format
-        self.recorder = SMCT(radius=radius,
+        self.player = SMCT(radius=radius,
                              center=center,
                              data_format=data_format,
                              data_dim=data_dim,
                              depth_limit=depth_limit,
-                             device="cpu",
                              dtype=dtype)
         self.step_size = step_size    
         self.num_round = num_round   
         self.dtype = dtype
-        n_nodes = self.recorder.n_internal
-        N = self.recorder.N
+        n_nodes = self.player.n_internal
+        N = self.player.N
+        
         self.explore_exploit = explore_exploit
-        self.player = None
         self.instant_reward = None
         self.epoch_round = epoch_round
         self.round=0
         self.gstep_id = 0
         self.gstep_id_base=0
-        self.stop = EarlyStopping(5, 1e-4)
+        self.stop = EarlyStopping(5, 5e-4)
         self.writer = writer
         self.basis_rms = None
         
-        self.init_player(device)
+        # the n_visits for mcst
+        self.register_buffer("num_visits", torch.zeros(n_nodes, N, N, N, dtype=torch.int32, device=device))
+        # self.init_player(device)
         
     def select(self):
         """Deep first search based on policy value: from root to the tail
@@ -281,22 +257,19 @@ class mcots(nn.Module):
         N = self.player.N
         p_p= -1
         p_idx = 0
-        r_idx = 0
         
         p_val = self.policy_puct() # leaf
         # self.writer.add_scalar(f'train/avg_p_val', p_val.mean(), self.gstep_id)    
             
         while p_p != 0:
             idx_ = torch.argmax(p_val[p_idx])
-            _, u, v, z = self.recorder._unpack_index(idx_)
+            _, u, v, z = self.player._unpack_index(idx_)
             # update the recorder
-            self.recorder.num_visits[r_idx, u, v, z] += 1
+            self.num_visits[p_idx, u, v, z] += 1
             p_p = child[p_idx, u, v, z]
-            p_r = self.recorder.child[r_idx, u, v, z]
             p_idx += p_p                            
-            r_idx += p_r
             
-        return p_idx, r_idx, [u, v, z]
+        return p_idx, [u, v, z]
         
     def getReward(self, rays, gt, lr_basis_func, cuda=True, fast=False):
         
@@ -374,18 +347,17 @@ class mcots(nn.Module):
                 
             self.gstep_id_base += batches_per_epoch
     
-    def expand(self, p_idx, r_idx, uvz):
+    def expand(self, p_idx, uvz):
         # pos -> player leaf
         u, v, z = uvz
-        p_r = self.recorder.child[r_idx, u, v, z]
+        # p_r = self.recorder.child[r_idx, u, v, z]
         res = self.player._refine_at(p_idx, (u, v, z))
-        
-        if p_r == 0:
-            self.player.data[-1].data += self.player.data[p_idx, u, v, z].data
-            self.recorder._refine_at(r_idx, (u, v, z))
-        # copy physical properties clone from recorder
-        else:
-            self.player.data[-1].data += self.recorder.data[r_idx].to(self.player.data.device)
+        self.player.data[-1].data += self.player.data[p_idx, u, v, z].clone()
+        self.num_visits = torch.cat((self.num_visits,
+                                    torch.zeros((1, *self.num_visits.shape[1:]),
+                                    dtype=self.num_visits.dtype,
+                                    device=self.num_visits.device)
+                                    ))        
         return res
     
     def run_a_round(self, rays, gt):
@@ -408,9 +380,9 @@ class mcots(nn.Module):
                 self.getReward(rays, gt, lr_basis_func)
                 depth = self.player.get_depth()
                 # select
-                p_idx, r_idx, uvz = self.select()
+                p_idx, uvz = self.select()
                 # expand
-                res = self.expand(p_idx, r_idx, uvz)
+                res = self.expand(p_idx, uvz)
                 self.writer.add_scalar(f'train/num_nodes', self.player.n_leaves, self.gstep_id)
                 self.writer.add_scalar(f'train/depth', self.player.get_depth(), self.gstep_id)
                 # log 
@@ -465,19 +437,10 @@ class mcots(nn.Module):
         """
         instant_reward = self.instant_reward
         device = instant_reward.device
-        total_reward = self.recorder.total_reward.to(device)
-        num_visits = self.recorder.num_visits.to(device)
-        return total_reward+self.explore_exploit*instant_reward/(1+num_visits)
+        # total_reward = self.recorder.total_reward.to(device)
+        num_visits = self.num_visits.to(device)
+        return instant_reward/(1+num_visits)
     
-    def copyFromPlayer(self):
-        p_c = self.player.child.to('cpu')
-        p_d = self.player.data.to('cpu')
-        r_c = self.recorder.child
-        r_d = self.recorder.data
-        N = self.recorder.N
-        instant_reward = self.instant_reward
-        # iterate over the player tree
-        self.copyLayer(p_d, p_c, r_d, r_c, instant_reward, N, 0, 0)
         
     def optim_basis_step(self, lr: float, beta: float=0.9, epsilon: float = 1e-8,
                          optim: str = 'rmsprop'):
@@ -502,53 +465,6 @@ class mcots(nn.Module):
             raise NotImplementedError(f'Unsupported optimizer {optim}')
         self.player.data.grad.zero_()        
 
-    # the recursive DFS
-    def copySubFrom(self, pos, p_d, p_c, r_c,instant_reward, N, p_idx, r_idx):
-        instant_reward = self.instant_reward
-        n, x, y, z = pos
-        self.recorder._refine_at(n, [x,y,z])
-        self.recorder.data[-1] = self.player.data[p_idx].detach().cpu()
-        if instant_reward:
-            self.recorder.total_reward[r_idx] += instant_reward[p_idx].detach().cpu()
-        
-        for x, y, z in (torch.zeros(N, N, N)==0).nonzero():
-            p_child = p_c[p_idx, x, y, z]
-            if p_child != 0:
-                r_child = r_c[r_idx, x, y, z]
-                self.copySubFrom([r_idx, x, y, z], p_d, p_c, r_c, instant_reward, N, p_idx+p_child, r_idx+r_child)
-
-    
-    # the recursive DFS 
-    def copyLayer(self, p_d, p_c, r_d, r_c, instant_reward, N, p_idx, r_idx):
-        
-        # overwrite data
-        self.recorder.data[r_idx] = self.player.data[p_idx].detach().cpu()
-        if instant_reward:
-            self.recorder.total_reward[r_idx] += instant_reward[p_idx].detach().cpu()
-        
-        for x, y, z in (torch.zeros(N, N, N)==0).nonzero():
-            p_child = p_c[p_idx, x, y, z]
-            if p_child !=0:
-                r_child = r_c[r_idx, x, y, z]
-                if r_child == 0:
-                    self.copySubFrom([r_idx, x, y, z], p_d, p_c, r_c, instant_reward,N, p_idx+p_child, r_idx+r_child)
-                else:
-                    self.copyLayer(p_d, p_c, r_d, r_c, instant_reward,N, p_idx+p_child, r_idx+r_child)
-        
-    def init_player(self, device):
-        # if previous player exists, copy its physical properties(data) and child, depth into the recorder.
-        # take the union operation on child and depth, and take the average on the data
-        if self.player is not None:
-            self.copyFromPlayer() 
-            self.player =  SMCT(record=False, radius=self.radius, center=self.center, data_format=self.data_format, 
-                                data_dim=self.recorder.data_dim, depth_limit=self.recorder.depth_limit, device=device, dtype=self.dtype)
-            # initialize physical properties from recorder
-            self.player.data.data = nn.Parameter(self.recorder.data.data[0, :, :, :], dtype=self.player.data.dtype, device=device)
-        else:
-            self.player =  SMCT(record=False, radius=self.radius, center=self.center, data_format=self.data_format, 
-                                data_dim=self.recorder.data_dim, depth_limit=self.recorder.depth_limit, device=device, dtype=self.dtype)
-        
-        
 def get_expon_lr_func(
     lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000
 ):

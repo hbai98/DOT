@@ -20,7 +20,7 @@ class TestMCOTS(unittest.TestCase):
     def setUp(self) -> None:
         self.dset = datasets["auto"](datadir, split='train')
         self.writer = SummaryWriter('/hpc/users/CONNECT/haotianbai/work_dir/AdaptiveNerf/checkpoints/mcots')
-        self.mcots = mcots(0.5, [0.5, 0.5, 0.5], 1e-5, device="cuda", writer=self.writer)
+        self.mcots = mcots(self.dset.scene_radius, self.dset.scene_center, 1e-5, device="cuda", writer=self.writer)
         self.rays = self.dset.rays
         directions = self.rays.dirs
         norms = np.linalg.norm(directions, axis=-1, keepdims=True)
