@@ -234,6 +234,7 @@ class mcots(nn.Module):
         
         self.explore_exploit = explore_exploit
         self.instant_reward = None
+        self.instant_visits = None
         self.epoch_round = epoch_round
         self.round=0
         self.gstep_id = 0
@@ -346,7 +347,7 @@ class mcots(nn.Module):
             self.gstep_id_base += batches_per_epoch
             
             if stop:
-                self._instant_reward(vals, mse)
+                self._instant_reward(vals)
                 break
 
                 
@@ -380,7 +381,7 @@ class mcots(nn.Module):
         delta_end = 5e-7
         
         delta_func = get_expon_func(delta_init, delta_end, lr_basis_delay_steps,
-                                    0.1, lr_basis_decay_steps)   
+                                    lr_basis_delay_mult, lr_basis_decay_steps)   
         
         
         self.writer.add_scalar(f'train/num_nodes', self.player.n_leaves, self.gstep_id)
@@ -414,12 +415,15 @@ class mcots(nn.Module):
                     
                 
 
-    def _instant_reward(self, weights, mse):
-        instant_reward = weights*torch.exp(-mse)
+    def _instant_reward(self, weights):
+        instant_reward = weights
         # integrate the player's contributions from leafs to roots 
         depth, indexes = torch.sort(self.player.parent_depth, dim=0, descending=True)
         N = self.player.N
         total_reward = torch.zeros(self.player.n_internal, N, N, N, device=self.player.data.device)
+        # change the num visits to upper bounds 
+        total_visits = torch.zeros(self.player.n_internal, N, N, N, device=self.player.data.device)
+        
         for d in depth:
             idx_ = d[0]
             depth = d[1]
@@ -429,12 +433,17 @@ class mcots(nn.Module):
             n, x, y, z = xyzi
             n_ = n + self.player.child[n, x, y, z]
             ins_rewards = instant_reward[n_]
+            ins_visits = self.num_visits[n_]
             # the root node idx is not recorded!
             if depth != 0:
                 total_reward[n, x, y, z] += ins_rewards.sum()
+                total_visits[n, x, y, z] += ins_visits.sum()
             # leaf_nodes
             total_reward[n_] += ins_rewards
+            total_visits[n_] += ins_visits
+            
         self.instant_reward = total_reward
+        self.instant_visits = total_visits
         
     def policy_puct(self):
         """Return the policy head value to guide the sampling
@@ -448,11 +457,7 @@ class mcots(nn.Module):
         Returns:
             p-uct value
         """
-        instant_reward = self.instant_reward
-        device = instant_reward.device
-        # total_reward = self.recorder.total_reward.to(device)
-        num_visits = self.num_visits.to(device)
-        return instant_reward/(1+num_visits)
+        return self.instant_reward/(1+self.instant_visits)
     
         
     def optim_basis_step(self, lr: float, beta: float=0.9, epsilon: float = 1e-8,
