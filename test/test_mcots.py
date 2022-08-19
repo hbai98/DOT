@@ -3,7 +3,7 @@ from re import T
 import sys
 sys.path.append('/hpc/users/CONNECT/haotianbai/work_dir/AdaptiveNerf')
 import unittest
-from opt.model.mcots import mcots, SMCT, get_expon_lr_func
+from opt.model.mcots import mcots, SMCT, get_expon_func
 from svox import Rays
 from references.svox2.opt.util.dataset import datasets
 datadir = '/hpc/users/CONNECT/haotianbai/work_dir/AdaptiveNerf/data/nerf_synthetic/drums'

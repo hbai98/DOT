@@ -15,7 +15,7 @@ import numpy as np
 _C = _get_c_extension()
 
 class SMCT(N3Tree):
-    def __init__(self, N=2, data_dim=None, depth_limit=20,
+    def __init__(self, N=2, data_dim=None, depth_limit=10,
             init_reserve=1, init_refine=0, geom_resize_fact=1.0,
             radius=0.5, center=[0.5, 0.5, 0.5],
             data_format="SH9",
@@ -194,7 +194,7 @@ class mcots(nn.Module):
                  num_round=50, 
                  data_dim=None,
                  explore_exploit=2.,
-                 depth_limit=10,
+                 depth_limit=30,
                  device="cpu",
                  data_format="SH9",
                  dtype=torch.float32,
@@ -238,7 +238,6 @@ class mcots(nn.Module):
         self.round=0
         self.gstep_id = 0
         self.gstep_id_base=0
-        self.stop = EarlyStopping(5, 5e-4)
         self.writer = writer
         self.basis_rms = None
         
@@ -271,7 +270,7 @@ class mcots(nn.Module):
             
         return p_idx, [u, v, z]
         
-    def getReward(self, rays, gt, lr_basis_func, cuda=True, fast=False):
+    def getReward(self, rays, gt, lr_basis_func, delta_func, cuda=True, fast=False):
         
         render = VolumeRenderer(self.player, step_size=self.step_size)
         total_rays = rays.origins.size(0)
@@ -282,6 +281,7 @@ class mcots(nn.Module):
         device = self.player.data.device
         lr_factor=1
         print_every=20
+        tol_stop = 5
         
         
         while True:
@@ -295,6 +295,8 @@ class mcots(nn.Module):
             pre_mse = 0
             stats = {"mse" : 0.0, "psnr" : 0.0, "invsqr_mse" : 0.0}
             vals = torch.zeros(self.player.child.size(), device=device)
+            delta_mse = delta_func(self.gstep_id)
+            stop = EarlyStopping(tol_stop, delta_mse)
             
             for iter_id, batch_begin in pbar:
                 self.gstep_id = iter_id + self.gstep_id_base
@@ -306,6 +308,7 @@ class mcots(nn.Module):
                 ray = Rays(batch_origins, batch_dirs, batch_viewdir)
                 
                 lr = lr_basis_func(self.gstep_id*lr_factor)
+                delta_mse = delta_func(self.gstep_id)
                 
                 with self.player.accumulate_weights(op="sum") as accum:
                     res = render.forward(ray, cuda=cuda, fast=fast)
@@ -326,26 +329,28 @@ class mcots(nn.Module):
                 stats['mse'] += mse_num
                 stats['psnr'] += psnr
                 stats['invsqr_mse'] += 1.0 / mse_num ** 2
-                stop = self.stop(pre_mse, stats['mse'])
-                if stop:
+                stop_ = stop(pre_mse, stats['mse'])
+                if stop_:
                     break
                 
                 if (iter_id + 1) % print_every == 0:
-                    self.writer.add_scalar('train/lr', lr, self.gstep_id)   
+                    self.writer.add_scalar('train/lr', lr, self.gstep_id)  
+                    self.writer.add_scalar('train/delta_mse', delta_mse, self.gstep_id) 
                     pre_mse = stats['mse']
                     
                     for stat_name in stats:
                         stat_val = stats[stat_name] / print_every
                         self.writer.add_scalar(f'train/{stat_name}', stat_val, self.gstep_id)  
                         stats[stat_name] = 0.0
-
+            
+            self.gstep_id_base += batches_per_epoch
+            
             if stop:
                 self._instant_reward(vals, mse)
-                self.stop.counter=0
                 break
 
                 
-            self.gstep_id_base += batches_per_epoch
+            
     
     def expand(self, p_idx, uvz):
         # pos -> player leaf
@@ -367,8 +372,16 @@ class mcots(nn.Module):
         lr_basis_delay_steps = 0
         lr_basis_delay_mult = 0.01
         lr_basis_decay_steps = 250000
-        lr_basis_func = get_expon_lr_func(lr_basis, lr_basis_final, lr_basis_delay_steps,
+        lr_basis_func = get_expon_func(lr_basis, lr_basis_final, lr_basis_delay_steps,
                                     lr_basis_delay_mult, lr_basis_decay_steps)   
+        
+        
+        delta_init = 5e-4
+        delta_end = 5e-7
+        
+        delta_func = get_expon_func(delta_init, delta_end, lr_basis_delay_steps,
+                                    0.1, lr_basis_decay_steps)   
+        
         
         self.writer.add_scalar(f'train/num_nodes', self.player.n_leaves, self.gstep_id)
         self.writer.add_scalar(f'train/depth', self.player.get_depth(), self.gstep_id)
@@ -377,7 +390,7 @@ class mcots(nn.Module):
         with tqdm(total=self.player.depth_limit) as pbar:
             while res:
                 # stimulate
-                self.getReward(rays, gt, lr_basis_func)
+                self.getReward(rays, gt, lr_basis_func, delta_func)
                 depth = self.player.get_depth()
                 # select
                 p_idx, uvz = self.select()
@@ -465,7 +478,7 @@ class mcots(nn.Module):
             raise NotImplementedError(f'Unsupported optimizer {optim}')
         self.player.data.grad.zero_()        
 
-def get_expon_lr_func(
+def get_expon_func(
     lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000
 ):
     """
