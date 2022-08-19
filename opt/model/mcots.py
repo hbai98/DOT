@@ -271,7 +271,7 @@ class mcots(nn.Module):
             
         return p_idx, [u, v, z]
         
-    def getReward(self, rays, gt, lr_basis_func, delta_func, cuda=True, fast=False):
+    def getReward(self, rays, gt, lr_basis_func, delta_func, delta_ctb_func, cuda=True, fast=False):
         
         render = VolumeRenderer(self.player, step_size=self.step_size)
         total_rays = rays.origins.size(0)
@@ -297,7 +297,9 @@ class mcots(nn.Module):
             stats = {"mse" : 0.0, "psnr" : 0.0, "invsqr_mse" : 0.0}
             vals = torch.zeros(self.player.child.size(), device=device)
             delta_mse = delta_func(self.gstep_id)
-            stop = EarlyStopping(tol_stop, delta_mse)
+            delta_ctb = delta_ctb_func(self.gstep_id)
+            
+            data_stop = EarlyStopping(tol_stop, delta_mse)
             
             for iter_id, batch_begin in pbar:
                 self.gstep_id = iter_id + self.gstep_id_base
@@ -330,7 +332,7 @@ class mcots(nn.Module):
                 stats['mse'] += mse_num
                 stats['psnr'] += psnr
                 stats['invsqr_mse'] += 1.0 / mse_num ** 2
-                stop_ = stop(pre_mse, stats['mse'])
+                stop_ = data_stop(pre_mse, stats['mse'])
                 if stop_:
                     break
                 
@@ -346,12 +348,12 @@ class mcots(nn.Module):
             
             self.gstep_id_base += batches_per_epoch
             
-            if stop:
-                self._instant_reward(vals)
+            if data_stop:
+                self.prune(delta_ctb, vals)
+                self.evaluate(vals)
                 break
 
                 
-            
     
     def expand(self, p_idx, uvz):
         # pos -> player leaf
@@ -377,13 +379,17 @@ class mcots(nn.Module):
                                     lr_basis_delay_mult, lr_basis_decay_steps)   
         
         
-        delta_init = 5e-4
+        delta_data_init = 5e-4
+        delta_ctb_init = 0.05
+        delta_ctb_end = 0.01
         delta_end = 5e-7
         delta_decay_steps = 250000
         
-        delta_func = get_expon_func(delta_init, delta_end, lr_basis_delay_steps,
+        delta_data_func = get_expon_func(delta_data_init, delta_end, lr_basis_delay_steps,
                                     lr_basis_delay_mult, delta_decay_steps)   
         
+        delta_ctb_func = get_expon_func(delta_ctb_init, delta_ctb_end, lr_basis_delay_steps,
+                                    lr_basis_delay_mult, delta_decay_steps)
         
         self.writer.add_scalar(f'train/num_nodes', self.player.n_leaves, self.gstep_id)
         self.writer.add_scalar(f'train/depth', self.player.get_depth(), self.gstep_id)
@@ -392,7 +398,7 @@ class mcots(nn.Module):
         with tqdm(total=self.player.depth_limit) as pbar:
             while res:
                 # stimulate
-                self.getReward(rays, gt, lr_basis_func, delta_func)
+                self.getReward(rays, gt, lr_basis_func, delta_data_func, delta_ctb_func)
                 depth = self.player.get_depth()
                 # select
                 p_idx, uvz = self.select()
@@ -415,9 +421,17 @@ class mcots(nn.Module):
                 pbar.update(delta_depth)
                 gc.collect()
                     
-                
+    def prune(self, delta_ctb, weights):
+        N = self.player.N
+        frontiers = weights[self.player._frontier].view(-1, N, N, N)
+        f_ctb = torch.sum(frontiers, dim=[1,2,3])
+        check = (f_ctb < delta_ctb).nonzero().T[0]
+        if check.size(0) !=0:
+            print(f'Prune {check.size(0)} frontier nodes with contribution less than {delta_ctb}.')
+            self.player.merge(check)
 
-    def _instant_reward(self, weights):
+
+    def evaluate(self, weights):
         instant_reward = weights
         # integrate the player's contributions from leafs to roots 
         depth, indexes = torch.sort(self.player.parent_depth, dim=0, descending=True)
@@ -425,8 +439,6 @@ class mcots(nn.Module):
         total_reward = instant_reward.clone()
         # change the num visits to upper bounds 
         total_visits = self.num_visits.clone()
-        
-        # the root node is also [0, 0] so it should not be recorded
         
         for d in depth:
             idx_ = d[0]
@@ -444,7 +456,8 @@ class mcots(nn.Module):
                 total_visits[n, x, y, z] += ins_visits.sum()
         self.instant_reward = total_reward
         self.instant_visits = total_visits
-            
+
+    
     def policy_puct(self):
         """Return the policy head value to guide the sampling
 

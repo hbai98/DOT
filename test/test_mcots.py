@@ -36,7 +36,7 @@ class TestMCOTS(unittest.TestCase):
         res = rearrange(res, '(B H W) C -> B H W C', B=B, H=H)
         mse = F.mse_loss(self.gt, res)
         mse.backward()
-        instant_reward = self.mcots._instant_reward(weights, mse)   
+        instant_reward = self.mcots.evaluate(weights, mse)   
         self.mcots.backpropagate(instant_reward)     
         print(weights.sum())
         print(F.mse_loss(self.gt, res))
@@ -80,6 +80,13 @@ class TestMCOTS(unittest.TestCase):
         save_image(rearrange(self.gt[0], 'H W C -> C H W'), 'test.png')
         # python -m unittest test.test_mcots.TestMCOTS.test_gt
         
+    def test_prune(self):
+        self.mcots.expand(0, (0,0,1))
+        weights = torch.zeros(self.mcots.player.child.shape).cuda()
+        delta = 0.05
+        self.mcots.prune(delta, weights)
+        print(self.mcots.player)
+        # python -m unittest test.test_mcots.TestMCOTS.test_prune
     def test_run_a_round(self):
         print(self.mcots.player)
      
@@ -90,6 +97,7 @@ class TestMCOTS(unittest.TestCase):
         print(self.mcots.player.child)
         print(self.mcots.num_visits)
         # python -m unittest test.test_mcots.TestMCOTS.test_run_a_round
+    
     
     def test_run(self):
         pass
