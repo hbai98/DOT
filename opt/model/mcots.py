@@ -7,14 +7,17 @@ from einops import rearrange
 import torch.nn.functional as F
 from tqdm import tqdm
 from svox import Rays
+from svox.svox import _get_c_extension
 import math
 import gc
+import numpy as np
+
+_C = _get_c_extension()
 
 class SMCT(N3Tree):
     def __init__(self, record=True, N=2, data_dim=None, depth_limit=10,
             init_reserve=1, init_refine=0, geom_resize_fact=1.0,
             radius=0.5, center=[0.5, 0.5, 0.5],
-            lr=1e-2, 
             data_format="SH9",
             extra_data=None,
             device="cpu",
@@ -79,7 +82,6 @@ class SMCT(N3Tree):
             self.register_parameter("data",
                 nn.Parameter(torch.empty(init_reserve, N, N, N, self.data_dim, dtype=dtype, device=device)))
             nn.init.constant_(self.data, 0.01)
-            self.opt = torch.optim.Adam(self.parameters(), lr=lr)
             
         self.register_buffer("child", torch.zeros(
             init_reserve, N, N, N, dtype=torch.int32, device=device))
@@ -111,6 +113,7 @@ class SMCT(N3Tree):
         self._lock_tree_structure = False
         self._weight_accum = None
         self._weight_accum_op = None
+        
 
         self.refine(repeats=init_refine)
     
@@ -259,11 +262,15 @@ class mcots(nn.Module):
         self.instant_reward = None
         self.epoch_round = epoch_round
         self.round=0
+        self.gstep_id = 0
+        self.gstep_id_base=0
+        self.stop = EarlyStopping(5, 1e-4)
         self.writer = writer
+        self.basis_rms = None
         
         self.init_player(device)
         
-    def select(self, idx):
+    def select(self):
         """Deep first search based on policy value: from root to the tail
         
         weights: shape-> [n, N, N, N] leaf nodes
@@ -277,7 +284,7 @@ class mcots(nn.Module):
         r_idx = 0
         
         p_val = self.policy_puct() # leaf
-        self.writer.add_scalar(f'train/avg_p_val', p_val.mean(), idx)    
+        # self.writer.add_scalar(f'train/avg_p_val', p_val.mean(), self.gstep_id)    
             
         while p_p != 0:
             idx_ = torch.argmax(p_val[p_idx])
@@ -291,16 +298,20 @@ class mcots(nn.Module):
             
         return p_idx, r_idx, [u, v, z]
         
-    def getReward(self, rays, gt, cuda=True, fast=False):
+    def getReward(self, rays, gt, lr_basis_func, cuda=True, fast=False):
         
         render = VolumeRenderer(self.player, step_size=self.step_size)
         total_rays = rays.origins.size(0)
         B, H, W, C = gt.shape
-        batch_size = H*W*2
+        batch_size = H*W
+        batches_per_epoch = (total_rays-1)//batch_size+1
         gt = rearrange(gt, 'B H W C -> (B H W) C')
         device = self.player.data.device
+        lr_factor=1
+        print_every=20
         
-        for _ in range(self.epoch_round):
+        
+        while True:
             # shuffle rays and gts
             indexer = torch.randperm(total_rays)
             rays = Rays(rays.origins[indexer], rays.dirs[indexer], rays.viewdirs[indexer])
@@ -308,9 +319,12 @@ class mcots(nn.Module):
             pbar = enumerate(range(0, total_rays,batch_size))
             
             mse = torch.zeros(1, device=device)
+            pre_mse = 0
             stats = {"mse" : 0.0, "psnr" : 0.0, "invsqr_mse" : 0.0}
             vals = torch.zeros(self.player.child.size(), device=device)
+            
             for iter_id, batch_begin in pbar:
+                self.gstep_id = iter_id + self.gstep_id_base
                 batch_end = min(batch_begin + batch_size, total_rays)
                 batch_origins = rays.origins[batch_begin: batch_end]
                 batch_dirs = rays.dirs[batch_begin: batch_end]
@@ -318,27 +332,48 @@ class mcots(nn.Module):
                 rgb_gt = gt[batch_begin:batch_end]
                 ray = Rays(batch_origins, batch_dirs, batch_viewdir)
                 
+                lr = lr_basis_func(self.gstep_id*lr_factor)
+                
                 with self.player.accumulate_weights(op="sum") as accum:
                     res = render.forward(ray, cuda=cuda, fast=fast)
                     
                 val = accum.value
                 val /= val.sum()
-        
+                
+                mse = F.mse_loss(rgb_gt, res)
+                self.player.zero_grad()
+                mse.backward()
+                self.optim_basis_step(lr)
+                
+                
                 vals += val
-                mse += F.mse_loss(rgb_gt, res)
                 # Stats
                 mse_num : float = mse.detach().item()
                 psnr = -10.0 * math.log10(mse_num)
                 stats['mse'] += mse_num
                 stats['psnr'] += psnr
                 stats['invsqr_mse'] += 1.0 / mse_num ** 2
+                stop = self.stop(pre_mse, stats['mse'])
+                if stop:
+                    break
                 
-            self.player.opt.zero_grad()
-            mse.backward()
-            self.player.opt.step()
-        
-        self._instant_reward(vals, mse)
-        return stats
+                if (iter_id + 1) % print_every == 0:
+                    self.writer.add_scalar('train/lr', lr, self.gstep_id)   
+                    self.writer.add_scalar('train/var_mse', np.abs(pre_mse-stats['mse']), self.gstep_id)
+                    pre_mse = stats['mse']
+                    
+                    for stat_name in stats:
+                        stat_val = stats[stat_name] / print_every
+                        self.writer.add_scalar(f'train/{stat_name}', stat_val, self.gstep_id)  
+                        stats[stat_name] = 0.0
+
+            if stop:
+                self._instant_reward(vals, mse)
+                self.stop.counter=0
+                break
+
+                
+            self.gstep_id_base += batches_per_epoch
     
     def expand(self, p_idx, r_idx, uvz):
         # pos -> player leaf
@@ -347,37 +382,46 @@ class mcots(nn.Module):
         res = self.player._refine_at(p_idx, (u, v, z))
         
         if p_r == 0:
-            self.player.data[-1].data += self.player.data[p_idx, u, v, z].clone()
+            self.player.data[-1].data += self.player.data[p_idx, u, v, z].data
             self.recorder._refine_at(r_idx, (u, v, z))
         # copy physical properties clone from recorder
         else:
             self.player.data[-1].data += self.recorder.data[r_idx].to(self.player.data.device)
         return res
     
-    def run_a_round(self, rays, gt, idx):
+    def run_a_round(self, rays, gt):
+        lr_factor = 1
+        
+        lr_basis = 1e-2
+        lr_basis_final = 5e-6
+        lr_basis_delay_steps = 0
+        lr_basis_delay_mult = 0.01
+        lr_basis_decay_steps = 250000
+        lr_basis_func = get_expon_lr_func(lr_basis, lr_basis_final, lr_basis_delay_steps,
+                                    lr_basis_delay_mult, lr_basis_decay_steps)   
+        
+        print_every = 20
+        self.writer.add_image(f'train/gt',gt[0], self.gstep_id, dataformats='HWC')
         res = True
         with tqdm(total=self.player.depth_limit) as pbar:
-            log = False
             while res:
-                idx +=1
                 # stimulate
-                stats = self.getReward(rays, gt)
+                self.getReward(rays, gt, lr_basis_func)
                 depth = self.player.get_depth()
                 # select
-                p_idx, r_idx, uvz = self.select(idx)
+                p_idx, r_idx, uvz = self.select()
                 # expand
                 res = self.expand(p_idx, r_idx, uvz)
                 # log 
                 delta_depth =(self.player.get_depth()-depth).item()
-                for k, v in stats.items():
-                    self.writer.add_scalar(f'train/{k}', v, idx)
+
                 if delta_depth!=0:
                     render = VolumeRenderer(self.player, step_size=self.step_size)
                     B, H, W, C = gt.shape
                     id_ = H*W
                     ray = Rays(rays.origins[:id_], rays.dirs[:id_], rays.viewdirs[:id_])
                     im = rearrange(render.forward(ray), '(H W) C -> H W C', H=H)
-                    self.writer.add_image(f'train/round_{self.round}_depth_{depth}',im, idx, dataformats='HWC')
+                    self.writer.add_image(f'train/round_{self.round}_depth_{depth}',im, self.gstep_id, dataformats='HWC')
                     
                 pbar.update(delta_depth)
                 gc.collect()
@@ -434,7 +478,28 @@ class mcots(nn.Module):
         # iterate over the player tree
         self.copyLayer(p_d, p_c, r_d, r_c, instant_reward, N, 0, 0)
         
-        
+    def optim_basis_step(self, lr: float, beta: float=0.9, epsilon: float = 1e-8,
+                         optim: str = 'rmsprop'):
+        """
+        Execute RMSprop/SGD step on SH
+        """
+        assert (
+            _C is not None and self.player.data.is_cuda
+        ), "CUDA extension is currently required for optimizers"
+
+        if optim == 'rmsprop':
+            if self.basis_rms is None or self.basis_rms.shape != self.player.data.shape:
+                del self.basis_rms
+                self.basis_rms = torch.zeros_like(self.player.data.data)
+            self.basis_rms.mul_(beta).addcmul_(self.player.data.grad, self.player.data.grad, value = 1.0 - beta)
+            denom = self.basis_rms.sqrt().add_(epsilon)
+            self.player.data.data.addcdiv_(self.player.data.grad, denom, value=-lr)
+        elif optim == 'sgd':
+            self.player.data.grad.mul_(lr)
+            self.player.data.data -= self.player.data.grad
+        else:
+            raise NotImplementedError(f'Unsupported optimizer {optim}')
+        self.player.data.grad.zero_()        
 
     # the recursive DFS
     def copySubFrom(self, pos, p_d, p_c, r_c,instant_reward, N, p_idx, r_idx):
@@ -481,4 +546,56 @@ class mcots(nn.Module):
         else:
             self.player =  SMCT(record=False, radius=self.radius, center=self.center, data_format=self.data_format, 
                                 data_dim=self.recorder.data_dim, depth_limit=self.recorder.depth_limit, device=device, dtype=self.dtype)
-            
+        
+        
+def get_expon_lr_func(
+    lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000
+):
+    """
+    Continuous learning rate decay function. Adapted from JaxNeRF
+
+    The returned rate is lr_init when step=0 and lr_final when step=max_steps, and
+    is log-linearly interpolated elsewhere (equivalent to exponential decay).
+    If lr_delay_steps>0 then the learning rate will be scaled by some smooth
+    function of lr_delay_mult, such that the initial learning rate is
+    lr_init*lr_delay_mult at the beginning of optimization but will be eased back
+    to the normal learning rate when steps>lr_delay_steps.
+
+    :param conf: config subtree 'lr' or similar
+    :param max_steps: int, the number of steps during optimization.
+    :return HoF which takes step as input
+    """
+
+    def helper(step):
+        if step < 0 or (lr_init == 0.0 and lr_final == 0.0):
+            # Disable this parameter
+            return 0.0
+        if lr_delay_steps > 0:
+            # A kind of reverse cosine decay.
+            delay_rate = lr_delay_mult + (1 - lr_delay_mult) * np.sin(
+                0.5 * np.pi * np.clip(step / lr_delay_steps, 0, 1)
+            )
+        else:
+            delay_rate = 1.0
+        t = np.clip(step / max_steps, 0, 1)
+        log_lerp = np.exp(np.log(lr_init) * (1 - t) + np.log(lr_final) * t)
+        return delay_rate * log_lerp
+
+    return helper
+
+
+class EarlyStopping():
+    def __init__(self, tolerance=5, min_delta=0):
+
+        self.tolerance = tolerance
+        self.min_delta = min_delta
+        self.counter = 0
+        self.early_stop = False
+
+    def __call__(self, train_loss, validation_loss):
+        if np.abs(validation_loss - train_loss) < self.min_delta:
+            self.counter +=1
+            if self.counter >= self.tolerance:  
+                self.early_stop = True
+                return True
+        return False

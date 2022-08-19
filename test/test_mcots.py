@@ -3,7 +3,7 @@ from re import T
 import sys
 sys.path.append('/hpc/users/CONNECT/haotianbai/work_dir/AdaptiveNerf')
 import unittest
-from opt.model.mcots import mcots, SMCT
+from opt.model.mcots import mcots, SMCT, get_expon_lr_func
 from svox import Rays
 from references.svox2.opt.util.dataset import datasets
 datadir = '/hpc/users/CONNECT/haotianbai/work_dir/AdaptiveNerf/data/nerf_synthetic/drums'
@@ -12,6 +12,8 @@ import torch
 import torch.nn.functional as F
 from einops import rearrange
 from torch.utils.tensorboard import SummaryWriter
+
+
 
 class TestMCOTS(unittest.TestCase):
     # python -m unittest test.test_mcots.TestMCOTS
@@ -80,8 +82,8 @@ class TestMCOTS(unittest.TestCase):
         
     def test_run_a_round(self):
         print(self.mcots.player)
-        
-        self.mcots.run_a_round(self.rays, self.gt, 0)
+     
+        self.mcots.run_a_round(self.rays, self.gt)
         
         print(self.mcots.player)
         # print(self.mcots.player.parent_depth)
