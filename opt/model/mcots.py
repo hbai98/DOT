@@ -379,7 +379,7 @@ class mcots(nn.Module):
         
         delta_init = 5e-4
         delta_end = 5e-7
-        delta_decay_steps = 25000
+        delta_decay_steps = 250000
         
         delta_func = get_expon_func(delta_init, delta_end, lr_basis_delay_steps,
                                     lr_basis_delay_mult, delta_decay_steps)   
@@ -422,12 +422,11 @@ class mcots(nn.Module):
         # integrate the player's contributions from leafs to roots 
         depth, indexes = torch.sort(self.player.parent_depth, dim=0, descending=True)
         N = self.player.N
-        total_reward = torch.zeros(self.player.n_internal, N, N, N, device=self.player.data.device)
+        total_reward = instant_reward.clone()
         # change the num visits to upper bounds 
-        total_visits = torch.zeros(self.player.n_internal, N, N, N, device=self.player.data.device)
+        total_visits = self.num_visits.clone()
         
         # the root node is also [0, 0] so it should not be recorded
-        total_reward[0] = instant_reward[0]
         
         for d in depth:
             idx_ = d[0]
@@ -437,15 +436,12 @@ class mcots(nn.Module):
             xyzi = self.player._unpack_index(idx_)    
             n, x, y, z = xyzi
             n_ = n + self.player.child[n, x, y, z]
-            ins_rewards = instant_reward[n_]
-            ins_visits = self.num_visits[n_]
+            ins_rewards = total_reward[n_]
+            ins_visits = total_visits[n_]
             # the root node idx is not recorded!
             if depth_ != 0:
                 total_reward[n, x, y, z] += ins_rewards.sum()
                 total_visits[n, x, y, z] += ins_visits.sum()
-            # leaf_nodes
-            total_reward[n_] += ins_rewards
-            total_visits[n_] += ins_visits
         self.instant_reward = total_reward
         self.instant_visits = total_visits
             
