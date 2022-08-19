@@ -399,6 +399,7 @@ class mcots(nn.Module):
                                     lr_basis_delay_mult, lr_basis_decay_steps)   
         
         self.writer.add_scalar(f'train/num_nodes', self.player.n_leaves, self.gstep_id)
+        self.writer.add_scalar(f'train/depth', self.player.get_depth(), self.gstep_id)
         self.writer.add_image(f'train/gt',gt[0], self.gstep_id, dataformats='HWC')
         res = True
         with tqdm(total=self.player.depth_limit) as pbar:
