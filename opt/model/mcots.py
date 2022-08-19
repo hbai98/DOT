@@ -359,7 +359,6 @@ class mcots(nn.Module):
                 
                 if (iter_id + 1) % print_every == 0:
                     self.writer.add_scalar('train/lr', lr, self.gstep_id)   
-                    self.writer.add_scalar('train/var_mse', np.abs(pre_mse-stats['mse']), self.gstep_id)
                     pre_mse = stats['mse']
                     
                     for stat_name in stats:
@@ -390,7 +389,6 @@ class mcots(nn.Module):
         return res
     
     def run_a_round(self, rays, gt):
-        lr_factor = 1
         
         lr_basis = 1e-2
         lr_basis_final = 5e-6
@@ -400,7 +398,7 @@ class mcots(nn.Module):
         lr_basis_func = get_expon_lr_func(lr_basis, lr_basis_final, lr_basis_delay_steps,
                                     lr_basis_delay_mult, lr_basis_decay_steps)   
         
-        print_every = 20
+        self.writer.add_scalar(f'train/num_nodes', self.player.n_leaves, self.gstep_id)
         self.writer.add_image(f'train/gt',gt[0], self.gstep_id, dataformats='HWC')
         res = True
         with tqdm(total=self.player.depth_limit) as pbar:
@@ -412,6 +410,8 @@ class mcots(nn.Module):
                 p_idx, r_idx, uvz = self.select()
                 # expand
                 res = self.expand(p_idx, r_idx, uvz)
+                self.writer.add_scalar(f'train/num_nodes', self.player.n_leaves, self.gstep_id)
+                self.writer.add_scalar(f'train/depth', self.player.get_depth(), self.gstep_id)
                 # log 
                 delta_depth =(self.player.get_depth()-depth).item()
 
