@@ -190,6 +190,7 @@ class mcots(nn.Module):
                  radius,
                  center,
                  step_size,
+                 init_refine=1,
                  epoch_round=5,
                  num_round=50, 
                  data_dim=None,
@@ -223,6 +224,7 @@ class mcots(nn.Module):
         self.player = SMCT(radius=radius,
                              center=center,
                              data_format=data_format,
+                             init_refine=init_refine,
                              data_dim=data_dim,
                              depth_limit=depth_limit,
                              dtype=dtype)
@@ -271,35 +273,34 @@ class mcots(nn.Module):
             
         return p_idx, [u, v, z]
         
-    def getReward(self, rays, gt, lr_basis_func, delta_func, delta_ctb_func, cuda=True, fast=False):
+    def getReward(self, rays, gt, lr_basis_func, delta_func, cuda=True, fast=False):
         
         render = VolumeRenderer(self.player, step_size=self.step_size)
         total_rays = rays.origins.size(0)
         B, H, W, C = gt.shape
-        batch_size = H*W
+        batch_size = H*W*5
         batches_per_epoch = (total_rays-1)//batch_size+1
         gt = rearrange(gt, 'B H W C -> (B H W) C')
         device = self.player.data.device
         lr_factor=1
-        print_every=20
-        tol_stop = 5
+        tol_stop = 3
         
+        
+        thred_mse = delta_func(self.gstep_id)
+        data_stop = HessianCheck(tol_stop, thred_mse)
         
         while True:
             # shuffle rays and gts
             indexer = torch.randperm(total_rays)
             rays = Rays(rays.origins[indexer], rays.dirs[indexer], rays.viewdirs[indexer])
             gt = gt[indexer]
-            pbar = enumerate(range(0, total_rays,batch_size))
+            pbar = enumerate(range(0, total_rays, batch_size))
             
             mse = torch.zeros(1, device=device)
             pre_mse = 0
             stats = {"mse" : 0.0, "psnr" : 0.0, "invsqr_mse" : 0.0}
             vals = torch.zeros(self.player.child.size(), device=device)
-            delta_mse = delta_func(self.gstep_id)
-            delta_ctb = delta_ctb_func(self.gstep_id)
             
-            data_stop = EarlyStopping(tol_stop, delta_mse)
             
             for iter_id, batch_begin in pbar:
                 self.gstep_id = iter_id + self.gstep_id_base
@@ -311,7 +312,7 @@ class mcots(nn.Module):
                 ray = Rays(batch_origins, batch_dirs, batch_viewdir)
                 
                 lr = lr_basis_func(self.gstep_id*lr_factor)
-                delta_mse = delta_func(self.gstep_id)
+                thred_mse = delta_func(self.gstep_id)
                 
                 with self.player.accumulate_weights(op="sum") as accum:
                     res = render.forward(ray, cuda=cuda, fast=fast)
@@ -332,27 +333,27 @@ class mcots(nn.Module):
                 stats['mse'] += mse_num
                 stats['psnr'] += psnr
                 stats['invsqr_mse'] += 1.0 / mse_num ** 2
-                stop_ = data_stop(pre_mse, stats['mse'])
-                if stop_:
-                    break
                 
-                if (iter_id + 1) % print_every == 0:
-                    self.writer.add_scalar('train/lr', lr, self.gstep_id)  
-                    self.writer.add_scalar('train/delta_mse', delta_mse, self.gstep_id) 
-                    pre_mse = stats['mse']
-                    
-                    for stat_name in stats:
-                        stat_val = stats[stat_name] / print_every
-                        self.writer.add_scalar(f'train/{stat_name}', stat_val, self.gstep_id)  
-                        stats[stat_name] = 0.0
+            stop_ = data_stop(pre_mse, stats['mse'])
+            self.writer.add_scalar('train/hessian_mse', data_stop.hessian, self.gstep_id)  
+            self.writer.add_scalar('train/mse_thred_count', data_stop.counter, self.gstep_id)        
+            pre_mse = stats['mse']       
+            self.writer.add_scalar('train/lr', lr, self.gstep_id)  
+            # self.writer.add_scalar('train/delta_ctb', delta_ctb, self.gstep_id)
+            self.writer.add_scalar('train/thred_mse', thred_mse, self.gstep_id)  
+            for stat_name in stats:
+                stat_val = stats[stat_name] / batches_per_epoch
+                self.writer.add_scalar(f'train/{stat_name}', stat_val, self.gstep_id)  
+                stats[stat_name] = 0                    
             
+       
             self.gstep_id_base += batches_per_epoch
             
-            if data_stop:
-                self.prune(delta_ctb, vals)
+            if stop_:
                 self.evaluate(vals)
                 break
-
+            
+                
                 
     
     def expand(self, p_idx, uvz):
@@ -370,26 +371,26 @@ class mcots(nn.Module):
     
     def run_a_round(self, rays, gt):
         
-        lr_basis = 1e-2
-        lr_basis_final = 5e-6
+        lr_basis = 1e-1
+        lr_basis_final = 5e-5
         lr_basis_delay_steps = 0
-        lr_basis_delay_mult = 0.01
-        lr_basis_decay_steps = 250000
+        lr_basis_delay_mult = 1e-2
+        lr_basis_decay_steps = 1e6
         lr_basis_func = get_expon_func(lr_basis, lr_basis_final, lr_basis_delay_steps,
                                     lr_basis_delay_mult, lr_basis_decay_steps)   
         
         
-        delta_data_init = 5e-4
-        delta_ctb_init = 0.05
-        delta_ctb_end = 0.01
-        delta_end = 5e-7
-        delta_decay_steps = 250000
+        delta_data_init = 1e-4
+        # delta_ctb_init = 1e-2
+        # delta_ctb_end = 1e-3
+        delta_data_end = 5e-6
+        delta_data_decay_steps = 1e6
         
-        delta_data_func = get_expon_func(delta_data_init, delta_end, lr_basis_delay_steps,
-                                    lr_basis_delay_mult, delta_decay_steps)   
+        delta_data_func = get_expon_func(delta_data_init, delta_data_end, lr_basis_delay_steps,
+                                    lr_basis_delay_mult, delta_data_decay_steps)   
         
-        delta_ctb_func = get_expon_func(delta_ctb_init, delta_ctb_end, lr_basis_delay_steps,
-                                    lr_basis_delay_mult, delta_decay_steps)
+        # delta_ctb_func = get_expon_func(delta_ctb_init, delta_ctb_end, lr_basis_delay_steps,
+        #                             lr_basis_delay_mult, delta_data_decay_steps)  
         
         self.writer.add_scalar(f'train/num_nodes', self.player.n_leaves, self.gstep_id)
         self.writer.add_scalar(f'train/depth', self.player.get_depth(), self.gstep_id)
@@ -398,7 +399,7 @@ class mcots(nn.Module):
         with tqdm(total=self.player.depth_limit) as pbar:
             while res:
                 # stimulate
-                self.getReward(rays, gt, lr_basis_func, delta_data_func, delta_ctb_func)
+                self.getReward(rays, gt, lr_basis_func, delta_data_func)
                 depth = self.player.get_depth()
                 # select
                 p_idx, uvz = self.select()
@@ -410,6 +411,10 @@ class mcots(nn.Module):
                 delta_depth =(self.player.get_depth()-depth).item()
 
                 if delta_depth!=0:
+                    # prune
+                    # thred = delta_ctb_func(self.gstep_id)
+                    # self.prune(thred)
+                    # self.writer.add_scalar(f'train/thred_ctb',thred, self.gstep_id)
                     render = VolumeRenderer(self.player, step_size=self.step_size)
                     B, H, W, C = gt.shape
                     id_ = H*W
@@ -418,14 +423,14 @@ class mcots(nn.Module):
                     self.writer.add_image(f'train/round_{self.round}_depth_{depth}',im, self.gstep_id, dataformats='HWC')
                     # print(self.instant_visits)
                     # print(self.num_visits)
-                pbar.update(delta_depth)
+                    pbar.update(delta_depth)
                 gc.collect()
                     
-    def prune(self, delta_ctb, weights):
-        N = self.player.N
-        frontiers = weights[self.player._frontier].view(-1, N, N, N)
-        f_ctb = torch.sum(frontiers, dim=[1,2,3])
-        check = (f_ctb < delta_ctb).nonzero().T[0]
+    def prune(self, delta_ctb):
+        nid = self.player._frontier
+        parent_sel = (*self.player._unpack_index(self.player.parent_depth[nid, 0]).long().T,)
+        frontiers = self.instant_reward[parent_sel]
+        check = (frontiers < delta_ctb).nonzero().T[0]
         if check.size(0) !=0:
             print(f'Prune {check.size(0)} frontier nodes with contribution less than {delta_ctb}.')
             self.player.merge(check)
@@ -532,18 +537,23 @@ def get_expon_func(
     return helper
 
 
-class EarlyStopping():
+class HessianCheck():
     def __init__(self, tolerance=5, min_delta=0):
 
         self.tolerance = tolerance
         self.min_delta = min_delta
         self.counter = 0
         self.early_stop = False
+        self.pre_delta = 0
+        self.hessian = None
 
     def __call__(self, train_loss, validation_loss):
-        if np.abs(validation_loss - train_loss) < self.min_delta:
+        delta = np.abs(validation_loss - train_loss)
+        self.hessian = np.abs(delta-self.pre_delta)
+        if self.hessian < self.min_delta:
             self.counter +=1
             if self.counter >= self.tolerance:  
                 self.early_stop = True
                 return True
+        self.pre_delta = delta
         return False
