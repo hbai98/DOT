@@ -1,5 +1,8 @@
+from turtle import forward
 import torch.nn as nn
 from svox import N3Tree, VolumeRenderer
+from svox.renderer import NDCConfig, _VolumeRenderFunction, _rays_spec_from_rays
+
 import torch
 from svox.helpers import  DataFormat
 from warnings import warn
@@ -11,6 +14,7 @@ from svox.svox import _get_c_extension
 import math
 import gc
 import numpy as np
+from collections import namedtuple
 
 _C = _get_c_extension()
 
@@ -190,12 +194,14 @@ class mcots(nn.Module):
                  radius,
                  center,
                  step_size,
-                 init_refine=1,
+                 init_refine=0,
+                 sigma_thresh=1e-3,
+                 stop_thresh=1e-3,
                  epoch_round=5,
                  num_round=50, 
                  data_dim=None,
                  explore_exploit=2.,
-                 depth_limit=30,
+                 depth_limit=15,
                  device="cpu",
                  data_format="SH9",
                  dtype=torch.float32,
@@ -236,46 +242,51 @@ class mcots(nn.Module):
         
         self.explore_exploit = explore_exploit
         self.instant_reward = None
-        self.instant_visits = None
         self.epoch_round = epoch_round
         self.round=0
         self.gstep_id = 0
         self.gstep_id_base=0
         self.writer = writer
         self.basis_rms = None
+        self.sigma_thresh = sigma_thresh
+        self.stop_thresh = stop_thresh
         
         # the n_visits for mcst
         self.register_buffer("num_visits", torch.zeros(n_nodes, N, N, N, dtype=torch.int32, device=device))
         # self.init_player(device)
         
-    def select(self):
-        """Deep first search based on policy value: from root to the tail
+    def select(self, k):
+        """Deep first search based on policy value: from root to the tail.
+        Select the top k nodes.
         
         weights: shape-> [n, N, N, N] leaf nodes
         the instant reward is conputed as: weight*exp(-mse)
         """
-        child = self.player.child #[n, N, N, N]
-        depth = self.player.parent_depth
-        N = self.player.N
-        p_p= -1
-        p_idx = 0
-        
         p_val = self.policy_puct() # leaf
-        # self.writer.add_scalar(f'train/avg_p_val', p_val.mean(), self.gstep_id)    
+        vals, idxs = torch.topk(p_val.flatten(), k)
+        idxs = torch.Tensor(np.array(np.unravel_index(idxs.cpu().numpy(), p_val.shape))).cuda().T
+        self.backtrace(idxs)
             
-        while p_p != 0:
-            idx_ = torch.argmax(p_val[p_idx])
-            _, u, v, z = self.player._unpack_index(idx_)
-            # update the recorder
-            self.num_visits[p_idx, u, v, z] += 1
-            p_p = child[p_idx, u, v, z]
-            p_idx += p_p                            
-            
-        return p_idx, [u, v, z]
+        return idxs.long()
+    
+    def backtrace(self, idxs):
+        idxs_ = idxs.clone()
         
+        while True:
+            sel = (*idxs_.long().T,)
+            self.num_visits[sel] += 1
+            
+            nid = idxs_[:, 0]
+            nid = nid[nid>0]
+            
+            if nid.size(0) == 0:
+                break
+            else:
+                idxs_ = self.player._unpack_index(self.player.parent_depth[nid.long(), 0])
+                
     def getReward(self, rays, gt, lr_basis_func, delta_func, cuda=True, fast=False):
         
-        render = VolumeRenderer(self.player, step_size=self.step_size)
+        render = VolumeRenderer(self.player, step_size=self.step_size, sigma_thresh=self.sigma_thresh, stop_thresh=self.stop_thresh)
         total_rays = rays.origins.size(0)
         B, H, W, C = gt.shape
         batch_size = H*W*5
@@ -283,7 +294,7 @@ class mcots(nn.Module):
         gt = rearrange(gt, 'B H W C -> (B H W) C')
         device = self.player.data.device
         lr_factor=1
-        tol_stop = 3
+        tol_stop = 5
         
         
         thred_mse = delta_func(self.gstep_id)
@@ -333,7 +344,9 @@ class mcots(nn.Module):
                 stats['mse'] += mse_num
                 stats['psnr'] += psnr
                 stats['invsqr_mse'] += 1.0 / mse_num ** 2
-                
+            
+            
+            self.instant_reward = vals
             stop_ = data_stop(pre_mse, stats['mse'])
             self.writer.add_scalar('train/hessian_mse', data_stop.hessian, self.gstep_id)  
             self.writer.add_scalar('train/mse_thred_count', data_stop.counter, self.gstep_id)        
@@ -350,23 +363,20 @@ class mcots(nn.Module):
             self.gstep_id_base += batches_per_epoch
             
             if stop_:
-                self.evaluate(vals)
+                # self.evaluate()
                 break
             
                 
-                
     
-    def expand(self, p_idx, uvz):
-        # pos -> player leaf
-        u, v, z = uvz
-        # p_r = self.recorder.child[r_idx, u, v, z]
-        res = self.player._refine_at(p_idx, (u, v, z))
-        self.player.data[-1].data += self.player.data[p_idx, u, v, z].clone()
-        self.num_visits = torch.cat((self.num_visits,
-                                    torch.zeros((1, *self.num_visits.shape[1:]),
-                                    dtype=self.num_visits.dtype,
-                                    device=self.num_visits.device)
-                                    ))        
+    def expand(self, idxs):
+        for p_idx, u, v, z in idxs:
+            res = self.player._refine_at(p_idx, (u, v, z))
+            self.player.data[-1].data += self.player.data[p_idx, u, v, z].clone()
+            self.num_visits = torch.cat((self.num_visits,
+                                        torch.zeros((1, *self.num_visits.shape[1:]),
+                                        dtype=self.num_visits.dtype,
+                                        device=self.num_visits.device)
+                                        ))        
         return res
     
     def run_a_round(self, rays, gt):
@@ -380,17 +390,19 @@ class mcots(nn.Module):
                                     lr_basis_delay_mult, lr_basis_decay_steps)   
         
         
-        delta_data_init = 1e-4
-        # delta_ctb_init = 1e-2
-        # delta_ctb_end = 1e-3
+        delta_data_init = 5e-4
         delta_data_end = 5e-6
         delta_data_decay_steps = 1e6
         
+        sample_rate_init = 1e-1
+        sample_rate_end = 1e-3
+        delta_data_decay_steps = 1e6
+        
+        
         delta_data_func = get_expon_func(delta_data_init, delta_data_end, lr_basis_delay_steps,
                                     lr_basis_delay_mult, delta_data_decay_steps)   
-        
-        # delta_ctb_func = get_expon_func(delta_ctb_init, delta_ctb_end, lr_basis_delay_steps,
-        #                             lr_basis_delay_mult, delta_data_decay_steps)  
+        delta_sample_rate_func = get_expon_func(sample_rate_init, sample_rate_end, lr_basis_delay_steps,
+                                                lr_basis_delay_mult, delta_data_decay_steps)
         
         self.writer.add_scalar(f'train/num_nodes', self.player.n_leaves, self.gstep_id)
         self.writer.add_scalar(f'train/depth', self.player.get_depth(), self.gstep_id)
@@ -398,15 +410,20 @@ class mcots(nn.Module):
         res = True
         with tqdm(total=self.player.depth_limit) as pbar:
             while res:
+                rate = delta_sample_rate_func(self.gstep_id)
+                k = self.player.n_leaves*rate
+                k = int(max(1, k))
                 # stimulate
                 self.getReward(rays, gt, lr_basis_func, delta_data_func)
                 depth = self.player.get_depth()
+
                 # select
-                p_idx, uvz = self.select()
+                idxs = self.select(k)
                 # expand
-                res = self.expand(p_idx, uvz)
+                res = self.expand(idxs)
                 self.writer.add_scalar(f'train/num_nodes', self.player.n_leaves, self.gstep_id)
                 self.writer.add_scalar(f'train/depth', self.player.get_depth(), self.gstep_id)
+                self.writer.add_scalar(f'train/sample_weight', rate, self.gstep_id)
                 # log 
                 delta_depth =(self.player.get_depth()-depth).item()
 
@@ -415,7 +432,7 @@ class mcots(nn.Module):
                     # thred = delta_ctb_func(self.gstep_id)
                     # self.prune(thred)
                     # self.writer.add_scalar(f'train/thred_ctb',thred, self.gstep_id)
-                    render = VolumeRenderer(self.player, step_size=self.step_size)
+                    render = VolumeRenderer(self.player, step_size=self.step_size, sigma_thresh=self.sigma_thresh, stop_thresh=self.stop_thresh)
                     B, H, W, C = gt.shape
                     id_ = H*W
                     ray = Rays(rays.origins[:id_], rays.dirs[:id_], rays.viewdirs[:id_])
@@ -436,31 +453,25 @@ class mcots(nn.Module):
             self.player.merge(check)
 
 
-    def evaluate(self, weights):
-        instant_reward = weights
-        # integrate the player's contributions from leafs to roots 
-        depth, indexes = torch.sort(self.player.parent_depth, dim=0, descending=True)
-        N = self.player.N
-        total_reward = instant_reward.clone()
-        # change the num visits to upper bounds 
-        total_visits = self.num_visits.clone()
+    # def evaluate(self):
+    #     # integrate the player's contributions from leafs to roots 
+    #     depth, indexes = torch.sort(self.player.parent_depth, dim=0, descending=True)
+    #     # change the num visits to upper bounds 
+    #     total_visits = self.num_visits.clone()
         
-        for d in depth:
-            idx_ = d[0]
-            depth_ = d[1]
+    #     for d in depth:
+    #         idx_ = d[0]
+    #         depth_ = d[1]
 
-            # internal node
-            xyzi = self.player._unpack_index(idx_)    
-            n, x, y, z = xyzi
-            n_ = n + self.player.child[n, x, y, z]
-            ins_rewards = total_reward[n_]
-            ins_visits = total_visits[n_]
-            # the root node idx is not recorded!
-            if depth_ != 0:
-                total_reward[n, x, y, z] += ins_rewards.sum()
-                total_visits[n, x, y, z] += ins_visits.sum()
-        self.instant_reward = total_reward
-        self.instant_visits = total_visits
+    #         # internal node
+    #         xyzi = self.player._unpack_index(idx_)    
+    #         n, x, y, z = xyzi
+    #         n_ = n + self.player.child[n, x, y, z]
+    #         ins_visits = total_visits[n_]
+    #         # the root node idx is not recorded!
+    #         if depth_ != 0:
+    #             total_visits[n, x, y, z] += ins_visits.sum()
+    #     self.instant_visits = total_visits
 
     
     def policy_puct(self):
@@ -475,7 +486,7 @@ class mcots(nn.Module):
         Returns:
             p-uct value
         """
-        return self.instant_reward/torch.exp((1+self.instant_visits))
+        return self.instant_reward/torch.exp((1+self.num_visits))
     
         
     def optim_basis_step(self, lr: float, beta: float=0.9, epsilon: float = 1e-8,
@@ -557,3 +568,18 @@ class HessianCheck():
                 return True
         self.pre_delta = delta
         return False
+    
+class VolumeRenderer(VolumeRenderer):
+    def __init__(self, tree, step_size: float = 0.001, 
+                 background_brightness: float = 1, 
+                 ndc: NDCConfig = None, 
+                 min_comp: int = 0, 
+                 max_comp: int = -1, 
+                 density_softplus: bool = False, 
+                 rgb_padding: float = 0,
+                 stop_thresh =1e-3,
+                 sigma_thresh=1e-3):
+        super().__init__(tree, step_size, background_brightness, ndc, min_comp, max_comp, density_softplus, rgb_padding)
+        self.sigma_thresh=sigma_thresh
+        self.stop_thresh=stop_thresh
+        

@@ -19,8 +19,8 @@ class TestMCOTS(unittest.TestCase):
     # python -m unittest test.test_mcots.TestMCOTS
     def setUp(self) -> None:
         self.dset = datasets["auto"](datadir, split='train')
-        self.writer = SummaryWriter('/hpc/users/CONNECT/haotianbai/work_dir/AdaptiveNerf/checkpoints/mcots')
-        self.mcots = mcots(self.dset.scene_radius, self.dset.scene_center, 1e-5, device="cuda", writer=self.writer)
+        self.writer = SummaryWriter('/hpc/users/CONNECT/haotianbai/work_dir/AdaptiveNerf/checkpoints/mcots/thresh/stop_1e_3_simga_1e_3')
+        self.mcots = mcots(self.dset.scene_radius, self.dset.scene_center, 1e-5, sigma_thresh=1e-3, stop_thresh=1e-3, device="cuda", writer=self.writer)
         self.rays = self.dset.rays
         directions = self.rays.dirs
         norms = np.linalg.norm(directions, axis=-1, keepdims=True)
@@ -30,26 +30,20 @@ class TestMCOTS(unittest.TestCase):
         return super().setUp()
     
     def test_reward(self):
-        self.mcots.expand([0, 0, 0, 1])
+        self.mcots.expand([[0, 0, 0, 1]])
         B, H, W, _ = self.gt.shape
         res, weights = self.mcots.getReward(self.rays)
         res = rearrange(res, '(B H W) C -> B H W C', B=B, H=H)
         mse = F.mse_loss(self.gt, res)
         mse.backward()
-        instant_reward = self.mcots.evaluate(weights, mse)   
-        self.mcots.backpropagate(instant_reward)     
-        print(weights.sum())
         print(F.mse_loss(self.gt, res))
         print(weights)
         # python -m unittest test.test_mcots.TestMCOTS.test_reward
 
     def test_select(self):
-        self.mcots.expand([0, 0, 0, 1])
-        B, H, W, _ = self.gt.shape   
-        res, weights = self.mcots.getReward(self.rays)
-        res = rearrange(res, '(B H W) C -> B H W C', B=B, H=H)
-        mse = F.mse_loss(self.gt, res)
-        self.mcots.select(weights, mse)
+        self.mcots.expand([[0, 0, 0, 1]])
+        self.mcots.instant_reward = torch.rand(self.mcots.player.child.shape).cuda()
+        self.mcots.select(1)
         # python -m unittest test.test_mcots.TestMCOTS.test_select
         
     def test_copyfromPlayer(self):
@@ -81,12 +75,21 @@ class TestMCOTS(unittest.TestCase):
         # python -m unittest test.test_mcots.TestMCOTS.test_gt
         
     def test_prune(self):
-        self.mcots.expand(0, (0,0,1))
+        self.mcots.expand([[0, 0, 0, 1]])
         weights = torch.zeros(self.mcots.player.child.shape).cuda()
         delta = 0.05
         self.mcots.prune(delta, weights)
         print(self.mcots.player)
         # python -m unittest test.test_mcots.TestMCOTS.test_prune
+    
+    def test_backtrace(self):
+        self.mcots.expand([[0, 0, 0, 1]])
+        print(self.mcots.player)
+        idxs = torch.Tensor([[0, 0, 1, 0], [1, 0, 1, 1]]).cuda()
+        self.mcots.backtrace(idxs)
+        print(self.mcots.num_visits)
+        # python -m unittest test.test_mcots.TestMCOTS.test_backtrace
+        
     def test_run_a_round(self):
         print(self.mcots.player)
      
