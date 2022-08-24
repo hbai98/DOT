@@ -19,8 +19,8 @@ class TestMCOTS(unittest.TestCase):
     # python -m unittest test.test_mcots.TestMCOTS
     def setUp(self) -> None:
         self.dset = datasets["auto"](datadir, split='train')
-        self.writer = SummaryWriter('/hpc/users/CONNECT/haotianbai/work_dir/AdaptiveNerf/checkpoints/mcots/thresh/stop_1e_3_simga_1e_3')
-        self.mcots = mcots(self.dset.scene_radius, self.dset.scene_center, 1e-5, sigma_thresh=1e-3, stop_thresh=1e-3, device="cuda", writer=self.writer)
+        self.writer = SummaryWriter('/hpc/users/CONNECT/haotianbai/work_dir/AdaptiveNerf/checkpoints/mcots/int_refine/3')
+        self.mcots = mcots(self.dset.scene_radius, self.dset.scene_center, 1e-5, sigma_thresh=1e-3, device="cuda", writer=self.writer, init_refine=3)
         self.rays = self.dset.rays
         directions = self.rays.dirs
         norms = np.linalg.norm(directions, axis=-1, keepdims=True)
@@ -83,7 +83,13 @@ class TestMCOTS(unittest.TestCase):
         # python -m unittest test.test_mcots.TestMCOTS.test_prune
     
     def test_backtrace(self):
+        from svox import VolumeRenderer
         self.mcots.expand([[0, 0, 0, 1]])
+        render = VolumeRenderer(self.mcots.player, 1e-5)
+        with self.mcots.player.accumulate_weights(op="sum") as accum:
+            res = render.forward(self.rays, cuda=True, fast=False)
+        self.mcots.instant_reward = accum.value
+        self.mcots.instant_reward/=self.mcots.instant_reward.sum()
         print(self.mcots.player)
         idxs = torch.Tensor([[0, 0, 1, 0], [1, 0, 1, 1]]).cuda()
         self.mcots.backtrace(idxs)

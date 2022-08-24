@@ -1,0 +1,81 @@
+Wed Aug 24 17:45:15 2022       
++-----------------------------------------------------------------------------+
+| NVIDIA-SMI 470.82.01    Driver Version: 470.82.01    CUDA Version: 11.4     |
+|-------------------------------+----------------------+----------------------+
+| GPU  Name        Persistence-M| Bus-Id        Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp  Perf  Pwr:Usage/Cap|         Memory-Usage | GPU-Util  Compute M. |
+|                               |                      |               MIG M. |
+|===============================+======================+======================|
+|   0  NVIDIA A30          Off  | 00000000:0C:00.0 Off |                    0 |
+| N/A   58C    P0    37W / 165W |  16294MiB / 24258MiB |      0%      Default |
+|                               |                      |             Disabled |
++-------------------------------+----------------------+----------------------+
+|   1  NVIDIA A30          Off  | 00000000:0D:00.0 Off |                    0 |
+| N/A   39C    P0    72W / 165W |  10408MiB / 24258MiB |    100%      Default |
+|                               |                      |             Disabled |
++-------------------------------+----------------------+----------------------+
+|   2  NVIDIA A30          Off  | 00000000:10:00.0 Off |                    0 |
+| N/A   57C    P0    41W / 165W |  16190MiB / 24258MiB |      2%      Default |
+|                               |                      |             Disabled |
++-------------------------------+----------------------+----------------------+
+|   3  NVIDIA A30          Off  | 00000000:15:00.0 Off |                    0 |
+| N/A   58C    P0    38W / 165W |  16190MiB / 24258MiB |      3%      Default |
+|                               |                      |             Disabled |
++-------------------------------+----------------------+----------------------+
+|   4  NVIDIA A30          Off  | 00000000:16:00.0 Off |                    0 |
+| N/A   60C    P0    41W / 165W |  16170MiB / 24258MiB |      2%      Default |
+|                               |                      |             Disabled |
++-------------------------------+----------------------+----------------------+
+|   5  NVIDIA A30          Off  | 00000000:19:00.0 Off |                    0 |
+| N/A   32C    P0    31W / 165W |      0MiB / 24258MiB |      0%      Default |
+|                               |                      |             Disabled |
++-------------------------------+----------------------+----------------------+
+|   6  NVIDIA A30          Off  | 00000000:1D:00.0 Off |                    0 |
+| N/A   31C    P0    31W / 165W |      0MiB / 24258MiB |      0%      Default |
+|                               |                      |             Disabled |
++-------------------------------+----------------------+----------------------+
+|   7  NVIDIA A30          Off  | 00000000:25:00.0 Off |                    0 |
+| N/A   31C    P0    33W / 165W |      0MiB / 24258MiB |      0%      Default |
+|                               |                      |             Disabled |
++-------------------------------+----------------------+----------------------+
+                                                                               
++-----------------------------------------------------------------------------+
+| Processes:                                                                  |
+|  GPU   GI   CI        PID   Type   Process name                  GPU Memory |
+|        ID   ID                                                   Usage      |
+|=============================================================================|
+|    1   N/A  N/A   3157375      C   python                          10405MiB |
++-----------------------------------------------------------------------------+
+Detected NeRF (Blender) dataset
+LOAD DATA /hpc/users/CONNECT/haotianbai/work_dir/AdaptiveNerf/data/nerf_synthetic/drums/train
+ Generating rays, scaling factor 1
+svox.N3Tree(N=2, data_dim=28, depth_limit=15, capacity:1/1, data_format:SH9)
+
+Sender: Unischeduler System <CONNECT.haotianbai@mgt02>
+Subject: Job 13725: </hpc/users/CONNECT/haotianbai/.jhjobs/1661334625.13725.1.shell> Exited
+
+Job </hpc/users/CONNECT/haotianbai/.jhjobs/1661334625.13725.1.shell> was submitted from host <mgt02> by user <CONNECT.haotianbai>.
+Job was executed on host(s) <4*g-node01>, in queue <gpu>, as user <CONNECT.haotianbai>.
+</hpc/users/CONNECT/haotianbai> was used as the home directory.
+</hpc/users/CONNECT/haotianbai/work_dir/AdaptiveNerf> was used as the working directory.
+Started at 2022-08-24 17:45:09
+Results reported at 2022-08-24 18:09:32
+
+Your job looked like:
+
+------------------------------------------------------------
+# User input
+/hpc/users/CONNECT/haotianbai/.jhjobs/1661334625.13725.1.shell
+------------------------------------------------------------
+
+Exited with exit code 130.
+
+Resource usage summary:
+
+    CPU time   :         1499.54 sec.
+    Max Memory :              4513 MB
+    Max Processes  :               3
+
+
+The output (if any) follows:
+

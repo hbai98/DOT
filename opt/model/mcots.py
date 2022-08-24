@@ -253,6 +253,7 @@ class mcots(nn.Module):
         
         # the n_visits for mcst
         self.register_buffer("num_visits", torch.zeros(n_nodes, N, N, N, dtype=torch.int32, device=device))
+        self.register_buffer("reward", torch.zeros(n_nodes, N, N, N, dtype=dtype, device=device))
         # self.init_player(device)
         
     def select(self, k):
@@ -262,27 +263,35 @@ class mcots(nn.Module):
         weights: shape-> [n, N, N, N] leaf nodes
         the instant reward is conputed as: weight*exp(-mse)
         """
-        p_val = self.policy_puct() # leaf
-        vals, idxs = torch.topk(p_val.flatten(), k)
-        idxs = torch.Tensor(np.array(np.unravel_index(idxs.cpu().numpy(), p_val.shape))).cuda().T
+        sel = (*self.player._all_leaves().T,)
+        p_val = self.policy_puct(sel) # leaf
+        vals, idxs = torch.topk(p_val, k)
+        idxs = self.player._all_leaves()[idxs]
         self.backtrace(idxs)
             
         return idxs.long()
     
     def backtrace(self, idxs):
         idxs_ = idxs.clone()
+        pre = 0
         
         while True:
             sel = (*idxs_.long().T,)
             self.num_visits[sel] += 1
+            self.reward[sel] += self.instant_reward[sel]+pre
+            pre = self.reward[sel]
             
             nid = idxs_[:, 0]
-            nid = nid[nid>0]
+            sel_ = nid>0
+            nid = nid[sel_]
+            pre = pre[sel_]
             
             if nid.size(0) == 0:
                 break
             else:
                 idxs_ = self.player._unpack_index(self.player.parent_depth[nid.long(), 0])
+        
+        self.reward/=self.reward.sum()
                 
     def getReward(self, rays, gt, lr_basis_func, delta_func, cuda=True, fast=False):
         
@@ -298,6 +307,7 @@ class mcots(nn.Module):
         
         
         thred_mse = delta_func(self.gstep_id)
+        
         data_stop = HessianCheck(tol_stop, thred_mse)
         
         while True:
@@ -349,7 +359,8 @@ class mcots(nn.Module):
             self.instant_reward = vals
             stop_ = data_stop(pre_mse, stats['mse'])
             self.writer.add_scalar('train/hessian_mse', data_stop.hessian, self.gstep_id)  
-            self.writer.add_scalar('train/mse_thred_count', data_stop.counter, self.gstep_id)        
+            self.writer.add_scalar('train/mse_thred_count', data_stop.counter, self.gstep_id)       
+             
             pre_mse = stats['mse']       
             self.writer.add_scalar('train/lr', lr, self.gstep_id)  
             # self.writer.add_scalar('train/delta_ctb', delta_ctb, self.gstep_id)
@@ -377,6 +388,12 @@ class mcots(nn.Module):
                                         dtype=self.num_visits.dtype,
                                         device=self.num_visits.device)
                                         ))        
+            self.reward = torch.cat((self.reward,
+                                    torch.zeros((1, *self.reward.shape[1:]),
+                                    dtype=self.reward.dtype,
+                                    device=self.reward.device)
+                                    ))        
+                       
         return res
     
     def run_a_round(self, rays, gt):
@@ -385,32 +402,42 @@ class mcots(nn.Module):
         lr_basis_final = 5e-5
         lr_basis_delay_steps = 0
         lr_basis_delay_mult = 1e-2
-        lr_basis_decay_steps = 1e6
+        lr_basis_decay_steps = 1e5
         lr_basis_func = get_expon_func(lr_basis, lr_basis_final, lr_basis_delay_steps,
                                     lr_basis_delay_mult, lr_basis_decay_steps)   
         
         
         delta_data_init = 5e-4
         delta_data_end = 5e-6
-        delta_data_decay_steps = 1e6
+        delta_data_decay_steps = 1e5
         
         sample_rate_init = 1e-1
         sample_rate_end = 1e-3
-        delta_data_decay_steps = 1e6
+        
+        explore_exploit_end = 1e-1
         
         
         delta_data_func = get_expon_func(delta_data_init, delta_data_end, lr_basis_delay_steps,
                                     lr_basis_delay_mult, delta_data_decay_steps)   
         delta_sample_rate_func = get_expon_func(sample_rate_init, sample_rate_end, lr_basis_delay_steps,
                                                 lr_basis_delay_mult, delta_data_decay_steps)
+        delta_explore_exploit = get_expon_func(self.explore_exploit, explore_exploit_end, lr_basis_delay_steps,
+                                               lr_basis_delay_mult, delta_data_decay_steps)
         
         self.writer.add_scalar(f'train/num_nodes', self.player.n_leaves, self.gstep_id)
         self.writer.add_scalar(f'train/depth', self.player.get_depth(), self.gstep_id)
         self.writer.add_image(f'train/gt',gt[0], self.gstep_id, dataformats='HWC')
         res = True
+        tol_stop = 3
+        thred_reward=1e-1
+        prune_check = PruneCheck(tol_stop, thred_reward)
+        
         with tqdm(total=self.player.depth_limit) as pbar:
             while res:
+                
                 rate = delta_sample_rate_func(self.gstep_id)
+                self.explore_exploit = delta_explore_exploit(self.gstep_id)
+                
                 k = self.player.n_leaves*rate
                 k = int(max(1, k))
                 # stimulate
@@ -421,9 +448,14 @@ class mcots(nn.Module):
                 idxs = self.select(k)
                 # expand
                 res = self.expand(idxs)
+                # prune
+                prune_check(self.player, self.reward)
+                
                 self.writer.add_scalar(f'train/num_nodes', self.player.n_leaves, self.gstep_id)
                 self.writer.add_scalar(f'train/depth', self.player.get_depth(), self.gstep_id)
                 self.writer.add_scalar(f'train/sample_weight', rate, self.gstep_id)
+                self.writer.add_scalar(f'train/explore_exploit', self.explore_exploit, self.gstep_id)
+                self.writer.add_scalar(f'train/prune', prune_check.num_prune, self.gstep_id)
                 # log 
                 delta_depth =(self.player.get_depth()-depth).item()
 
@@ -443,38 +475,8 @@ class mcots(nn.Module):
                     pbar.update(delta_depth)
                 gc.collect()
                     
-    def prune(self, delta_ctb):
-        nid = self.player._frontier
-        parent_sel = (*self.player._unpack_index(self.player.parent_depth[nid, 0]).long().T,)
-        frontiers = self.instant_reward[parent_sel]
-        check = (frontiers < delta_ctb).nonzero().T[0]
-        if check.size(0) !=0:
-            print(f'Prune {check.size(0)} frontier nodes with contribution less than {delta_ctb}.')
-            self.player.merge(check)
-
-
-    # def evaluate(self):
-    #     # integrate the player's contributions from leafs to roots 
-    #     depth, indexes = torch.sort(self.player.parent_depth, dim=0, descending=True)
-    #     # change the num visits to upper bounds 
-    #     total_visits = self.num_visits.clone()
-        
-    #     for d in depth:
-    #         idx_ = d[0]
-    #         depth_ = d[1]
-
-    #         # internal node
-    #         xyzi = self.player._unpack_index(idx_)    
-    #         n, x, y, z = xyzi
-    #         n_ = n + self.player.child[n, x, y, z]
-    #         ins_visits = total_visits[n_]
-    #         # the root node idx is not recorded!
-    #         if depth_ != 0:
-    #             total_visits[n, x, y, z] += ins_visits.sum()
-    #     self.instant_visits = total_visits
-
     
-    def policy_puct(self):
+    def policy_puct(self, sel):
         """Return the policy head value to guide the sampling
 
         P-UCT = total_reward(s, a)+ C*instant_reward(s,a)/(1+num_visits(s))
@@ -486,7 +488,12 @@ class mcots(nn.Module):
         Returns:
             p-uct value
         """
-        return self.instant_reward/torch.exp((1+self.num_visits))
+        
+        # res = self.reward[sel] + self.explore_exploit*self.instant_reward[sel]/torch.exp((1+self.num_visits[sel]))
+        res = self.reward[sel] + self.explore_exploit*self.instant_reward[sel]/(1+self.num_visits[sel])
+        # res = self.reward[sel] + self.explore_exploit*self.instant_reward[sel]
+        
+        return res 
     
         
     def optim_basis_step(self, lr: float, beta: float=0.9, epsilon: float = 1e-8,
@@ -558,8 +565,8 @@ class HessianCheck():
         self.pre_delta = 0
         self.hessian = None
 
-    def __call__(self, train_loss, validation_loss):
-        delta = np.abs(validation_loss - train_loss)
+    def __call__(self, cur, pre):
+        delta = np.abs(pre - cur)
         self.hessian = np.abs(delta-self.pre_delta)
         if self.hessian < self.min_delta:
             self.counter +=1
@@ -569,6 +576,49 @@ class HessianCheck():
         self.pre_delta = delta
         return False
     
+class PruneCheck():
+    def __init__(self, tolerance=5, min_delta=0):
+        self.tolerance = tolerance
+        self.min_delta = min_delta
+        self.counter = dict()
+        self.num_prune = 0
+        
+        self.pre_frontier = None
+        self.pre_reward = None
+    
+    def __call__(self, player, reward):     
+        if self.pre_frontier is None or self.pre_reward is None:
+            self.pre_frontier = player._frontier.cpu().numpy()
+            self.pre_reward = reward
+            return 
+        
+        preFron = self.pre_frontier
+        curFron = player._frontier.cpu().numpy()
+        # only check the frontier nodes in intersection
+        nids = torch.Tensor(np.intersect1d(preFron, curFron)).long()
+        if len(nids) == 0:
+            return 
+        
+        parent_sel = (*player._unpack_index(player.parent_depth[nids, 0]).long().T,) 
+        pre_reward = self.pre_reward[parent_sel]
+        cur_reward = reward[parent_sel]
+        delta = torch.abs(pre_reward-cur_reward)
+        
+        for i, nid in enumerate(nids):
+            if delta[i] < self.min_delta:
+                if nid in self.counter:
+                    self.counter[nid] +=1
+                    if self.counter[nid] >= self.tolerance:  
+                        self.player.merge(nid == curFron)
+                        self.num_prune += 1
+                        self.counter[nid] = 0
+                else:
+                    self.counter[nid] = 1
+        
+        self.pre_frontier = player._frontier.cpu().numpy()
+        self.pre_reward = reward  
+        return
+    
 class VolumeRenderer(VolumeRenderer):
     def __init__(self, tree, step_size: float = 0.001, 
                  background_brightness: float = 1, 
@@ -577,7 +627,7 @@ class VolumeRenderer(VolumeRenderer):
                  max_comp: int = -1, 
                  density_softplus: bool = False, 
                  rgb_padding: float = 0,
-                 stop_thresh =1e-3,
+                 stop_thresh =0.0,
                  sigma_thresh=1e-3):
         super().__init__(tree, step_size, background_brightness, ndc, min_comp, max_comp, density_softplus, rgb_padding)
         self.sigma_thresh=sigma_thresh
