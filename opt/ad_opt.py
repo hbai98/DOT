@@ -37,17 +37,13 @@ group.add_argument('--basis_type',
                     help='Basis function type')
 group.add_argument('--sh_dim', type=int, default=9, help='SH/learned basis dimensions (at most 10)')
 
-group.add_argument('--mlp_posenc_size', type=int, default=4, help='Positional encoding size if using MLP basis; 0 to disable')
-group.add_argument('--mlp_width', type=int, default=32, help='MLP width if using MLP basis')
-
 group.add_argument('--background_nlayers', type=int, default=0,#32,
                    help='Number of background layers (0=disable BG model)')
 group.add_argument('--background_reso', type=int, default=512, help='Background resolution')
 
 roup = parser.add_argument_group("optimization")
-group.add_argument('--n_iters', type=int, default=10 * 12800, help='total number of iters to optimize for')
 group.add_argument('--batch_size', type=int, default=
-                     5000,
+                     640000*5,
                      #100000,
                      #  2000,
                    help='batch size')

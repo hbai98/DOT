@@ -14,13 +14,12 @@ from einops import rearrange
 from torch.utils.tensorboard import SummaryWriter
 
 
-
 class TestMCOTS(unittest.TestCase):
     # python -m unittest test.test_mcots.TestMCOTS
     def setUp(self) -> None:
         self.dset = datasets["auto"](datadir, split='train')
-        self.writer = SummaryWriter('/hpc/users/CONNECT/haotianbai/work_dir/AdaptiveNerf/checkpoints/mcots/int_refine/3')
-        self.mcots = mcots(self.dset.scene_radius, self.dset.scene_center, 1e-5, sigma_thresh=1e-3, device="cuda", writer=self.writer, init_refine=3)
+        self.writer = SummaryWriter('/hpc/users/CONNECT/haotianbai/work_dir/AdaptiveNerf/checkpoints/mcots/prune/init5_revMSE')
+        self.mcots = mcots(self.dset.scene_radius, self.dset.scene_center, 1e-5, sigma_thresh=1e-3, device="cuda", writer=self.writer, init_refine=5)
         self.rays = self.dset.rays
         directions = self.rays.dirs
         norms = np.linalg.norm(directions, axis=-1, keepdims=True)
@@ -107,6 +106,12 @@ class TestMCOTS(unittest.TestCase):
         print(self.mcots.num_visits)
         # python -m unittest test.test_mcots.TestMCOTS.test_run_a_round
     
-    
+    def test_time(self):
+        self.mcots = mcots(self.dset.scene_radius, self.dset.scene_center, 1e-5, sigma_thresh=1e-3, depth_limit=4, 
+                           device="cuda", writer=self.writer, init_refine=3)
+        with torch.autograd.profiler.profile(use_cuda=True) as prof:
+            self.mcots.run_a_round(self.rays, self.gt)
+        print(prof)
+        # python -m unittest test.test_mcots.TestMCOTS.test_time
     def test_run(self):
         pass
