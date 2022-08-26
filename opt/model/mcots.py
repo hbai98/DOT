@@ -190,77 +190,6 @@ class SMCT(N3Tree):
         self._invalidate()
         return resized
     
-    # Leaf refinement & memory management methods
-    def refine(self, repeats=1, sel=None):
-        """
-        Refine each selected leaf node, respecting depth_limit.
-
-        :param repeats: int number of times to repeat refinement
-        :param sel: :code:`(N, 4)` node selector. Default selects all leaves.
-
-        :return: True iff N3Tree.data parameter was resized, requiring
-                 optimizer reinitialization if you're using an optimizer
-
-        .. warning::
-            The parameter :code:`tree.data` can change due to refinement. If any refine() call returns True, please re-make any optimizers
-            using :code:`tree.params()`.
-
-        .. warning::
-            The selector :code:`sel` is assumed to contain unique leaf indices. If there are duplicates
-            memory will be wasted. We do not dedup here for efficiency reasons.
-
-        """
-        if self._lock_tree_structure:
-            raise RuntimeError("Tree locked")
-        with torch.no_grad():
-            resized = False
-            for repeat_id in range(repeats):
-                filled = self.n_internal
-                if sel is None:
-                    # Default all leaves
-                    sel = (*self._all_leaves().T,)
-                depths = self.parent_depth[sel[0], 1]
-                # Filter by depth & leaves
-                good_mask = (depths < self.depth_limit) & (self.child[sel] == 0)
-                sel = [t[good_mask] for t in sel]
-                leaf_node =  torch.stack(sel, dim=-1).to(device=self.data.device)
-                num_nc = len(sel[0])
-                if num_nc == 0:
-                    # Nothing to do
-                    return False
-                new_filled = filled + num_nc
-
-                cap_needed = new_filled - self.capacity
-                if cap_needed > 0:
-                    self._resize_add_cap(cap_needed)
-                    resized = True
-
-                new_idxs = torch.arange(filled, filled + num_nc,
-                        device=leaf_node.device, dtype=self.child.dtype) # NNC
-
-                self.child[filled:new_filled] = 0
-                self.child[sel] = new_idxs - leaf_node[:, 0].to(torch.int32)
-                self.data.data[filled:new_filled] = self.data.data[
-                        sel][:, None, None, None]
-                self.parent_depth[filled:new_filled, 0] = self._pack_index(leaf_node)  # parent
-                self.parent_depth[filled:new_filled, 1] = self.parent_depth[
-                        leaf_node[:, 0], 1] + 1  # depth
-
-                if repeat_id < repeats - 1:
-                    # Infer new selector
-                    t1 = torch.arange(filled, new_filled,
-                            device=self.data.device).repeat_interleave(self.N ** 3)
-                    rangen = torch.arange(self.N, device=self.data.device)
-                    t2 = rangen.repeat_interleave(self.N ** 2).repeat(
-                            new_filled - filled)
-                    t3 = rangen.repeat_interleave(self.N).repeat(
-                            (new_filled - filled) * self.N)
-                    t4 = rangen.repeat((new_filled - filled) * self.N ** 2)
-                    sel = (t1, t2, t3, t4)
-                self._n_internal += num_nc
-        if repeats > 0:
-            self._invalidate()
-        return resized
 
 
 class mcots(nn.Module):
@@ -456,29 +385,26 @@ class mcots(nn.Module):
 
     def expand(self, idxs):
         # group expansion 
-        for p_idx, u, v, z in idxs:
-            res = self.player._refine_at(p_idx, (u, v, z))
-            if not res:
-                return res
-            self.player.data[-1].data += self.player.data[p_idx,
-                                                          u, v, z].clone()
-            self.num_visits = torch.cat((self.num_visits,
-                                        torch.zeros((1, *self.num_visits.shape[1:]),
-                                                    dtype=self.num_visits.dtype,
-                                                    device=self.num_visits.device)
-                                         ))
-            self.reward = torch.cat((self.reward,
-                                    torch.zeros((1, *self.reward.shape[1:]),
-                                                dtype=self.reward.dtype,
-                                                device=self.reward.device)
-                                     ))
+        i = idxs.size(0)
+        idxs = (*idxs.long().T,)
+        res = self.player.refine(sel=idxs)
+        self.num_visits = torch.cat((self.num_visits,
+                                    torch.zeros((i, *self.num_visits.shape[1:]),
+                                                dtype=self.num_visits.dtype,
+                                                device=self.num_visits.device)
+                                        ))
+        self.reward = torch.cat((self.reward,
+                                torch.zeros((i, *self.reward.shape[1:]),
+                                            dtype=self.reward.dtype,
+                                            device=self.reward.device)
+                                    ))
 
         return res
 
     def run_a_round(self, rays, gt):
 
-        lr_basis = 1e0
-        lr_basis_final = 5e-5
+        lr_basis = 1e-1
+        lr_basis_final = 5e-4
         lr_basis_delay_steps = 0
         lr_basis_delay_mult = 1e-2
         lr_basis_decay_steps = 1e5
@@ -486,7 +412,7 @@ class mcots(nn.Module):
                                        lr_basis_delay_mult, lr_basis_decay_steps)
 
         delta_data_init = 5e-4
-        delta_data_end = 5e-3
+        delta_data_end = 5e-5
         delta_data_decay_steps = 1e5
 
         sample_rate_init = 5e-1
@@ -550,7 +476,7 @@ class mcots(nn.Module):
                 idxs = self.select(k)
                 # end.record()
                 # torch.cuda.synchronize()
-                # print(f'select:{start.elapsed_time(end)}')
+                print(f'select:{start.elapsed_time(end)}')
                 # expand
                 # start = torch.cuda.Event(enable_timing=True)
                 # end = torch.cuda.Event(enable_timing=True)
@@ -558,7 +484,7 @@ class mcots(nn.Module):
                 res = self.expand(idxs)
                 # end.record()
                 # torch.cuda.synchronize()
-                # print(f'expand:{start.elapsed_time(end)}')
+                print(f'expand:{start.elapsed_time(end)}')
                 # prune
                 # prune_check(self.player, self.reward)
 

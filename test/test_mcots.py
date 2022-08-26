@@ -18,8 +18,8 @@ class TestMCOTS(unittest.TestCase):
     # python -m unittest test.test_mcots.TestMCOTS
     def setUp(self) -> None:
         self.dset = datasets["auto"](datadir, split='train')
-        self.writer = SummaryWriter('/hpc/users/CONNECT/haotianbai/work_dir/AdaptiveNerf/checkpoints/mcots/prune/init5_revMSE')
-        self.mcots = mcots(self.dset.scene_radius, self.dset.scene_center, 1e-5, sigma_thresh=1e-3, device="cuda", writer=self.writer, init_refine=5)
+        self.writer = SummaryWriter('/hpc/users/CONNECT/haotianbai/work_dir/AdaptiveNerf/checkpoints/mcots/expand/init_1')
+        self.mcots = mcots(self.dset.scene_radius, self.dset.scene_center, 1e-5, sigma_thresh=1e-3, device="cuda", writer=self.writer, init_refine=1)
         self.rays = self.dset.rays
         directions = self.rays.dirs
         norms = np.linalg.norm(directions, axis=-1, keepdims=True)
@@ -105,7 +105,17 @@ class TestMCOTS(unittest.TestCase):
         print(self.mcots.player.child)
         print(self.mcots.num_visits)
         # python -m unittest test.test_mcots.TestMCOTS.test_run_a_round
-    
+        
+    def test_refine(self):
+        self.mcots = mcots(self.dset.scene_radius, self.dset.scene_center, 1e-5, sigma_thresh=1e-3, depth_limit=4, 
+                           device="cuda", writer=self.writer, init_refine=0)
+        self.mcots.player.data.data[0, 0, 0, 1] +=2
+        self.mcots.player.data.data[0, 0, 1, 1] +=3
+        sel = (*torch.Tensor([[0, 0, 0, 1], [0, 0, 1, 1]]).long().T, )
+        self.mcots.player.refine(sel=sel)
+        print(self.mcots.player.data.shape)
+        print(self.mcots.player.data)
+        # python -m unittest test.test_mcots.TestMCOTS.test_refine
     def test_time(self):
         self.mcots = mcots(self.dset.scene_radius, self.dset.scene_center, 1e-5, sigma_thresh=1e-3, depth_limit=4, 
                            device="cuda", writer=self.writer, init_refine=3)
