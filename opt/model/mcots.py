@@ -476,7 +476,7 @@ class mcots(nn.Module):
                 idxs = self.select(k)
                 # end.record()
                 # torch.cuda.synchronize()
-                print(f'select:{start.elapsed_time(end)}')
+                # print(f'select:{start.elapsed_time(end)}')
                 # expand
                 # start = torch.cuda.Event(enable_timing=True)
                 # end = torch.cuda.Event(enable_timing=True)
@@ -484,7 +484,7 @@ class mcots(nn.Module):
                 res = self.expand(idxs)
                 # end.record()
                 # torch.cuda.synchronize()
-                print(f'expand:{start.elapsed_time(end)}')
+                # print(f'expand:{start.elapsed_time(end)}')
                 # prune
                 # prune_check(self.player, self.reward)
 

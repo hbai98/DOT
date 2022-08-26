@@ -1,12 +1,0 @@
-+ exec
-/hpc/users/CONNECT/haotianbai/work_dir/AdaptiveNerf/references/svox2/opt/util/nerf_dataset.py:62: ResourceWarning: unclosed file <_io.TextIOWrapper name='/hpc/users/CONNECT/haotianbai/work_dir/AdaptiveNerf/data/nerf_synthetic/drums/transforms_train.json' mode='r' encoding='UTF-8'>
-  j = json.load(open(data_json, "r"))
-ResourceWarning: Enable tracemalloc to get the object allocation traceback
-  0%|          | 0/100 [00:00<?, ?it/s]/hpc/users/CONNECT/haotianbai/work_dir/AdaptiveNerf/references/svox2/opt/util/nerf_dataset.py:72: DeprecationWarning: Starting with ImageIO v3 the behavior of this function will switch to that of iio.v3.imread. To keep the current behavior (and make this warning dissapear) use `import imageio.v2 as imageio` or call `imageio.v2.imread` directly.
-  im_gt = imageio.imread(fpath)
-  7%|▋         | 7/100 [00:00<00:01, 62.71it/s] 15%|█▌        | 15/100 [00:00<00:01, 69.78it/s] 23%|██▎       | 23/100 [00:00<00:01, 70.94it/s] 31%|███       | 31/100 [00:00<00:00, 71.96it/s] 39%|███▉      | 39/100 [00:00<00:00, 72.44it/s] 47%|████▋     | 47/100 [00:00<00:00, 72.66it/s] 55%|█████▌    | 55/100 [00:00<00:00, 72.76it/s] 63%|██████▎   | 63/100 [00:00<00:00, 72.76it/s] 71%|███████   | 71/100 [00:00<00:00, 73.10it/s] 79%|███████▉  | 79/100 [00:01<00:00, 72.45it/s] 87%|████████▋ | 87/100 [00:01<00:00, 72.58it/s] 95%|█████████▌| 95/100 [00:01<00:00, 72.79it/s]100%|██████████| 100/100 [00:01<00:00, 72.20it/s]
-/hpc/users/CONNECT/haotianbai/.conda/envs/Adnerf/lib/python3.8/site-packages/torch/functional.py:478: UserWarning: torch.meshgrid: in an upcoming release, it will be required to pass the indexing argument. (Triggered internally at  /opt/conda/conda-bld/pytorch_1656352465323/work/aten/src/ATen/native/TensorShape.cpp:2894.)
-  return _VF.meshgrid(tensors, **kwargs)  # type: ignore[attr-defined]
-/hpc/users/CONNECT/haotianbai/.conda/envs/Adnerf/lib/python3.8/site-packages/torch/utils/tensorboard/summary.py:486: DeprecationWarning: ANTIALIAS is deprecated and will be removed in Pillow 10 (2023-07-01). Use Resampling.LANCZOS instead.
-  image = image.resize((scaled_width, scaled_height), Image.ANTIALIAS)
-  0%|          | 0/15 [00:00<?, ?it/s]
