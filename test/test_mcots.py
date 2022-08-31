@@ -1,33 +1,36 @@
+from torch.utils.tensorboard import SummaryWriter
+from einops import rearrange
+import torch.nn.functional as F
+import torch
+import numpy as np
+from references.svox2.opt.util.dataset import datasets
+from svox import Rays
+from opt.model.mcost import Mcost, SMCT, get_expon_func
+import unittest
 from math import radians
 from re import T
 import sys
 sys.path.append('/hpc/users/CONNECT/haotianbai/work_dir/AdaptiveNerf')
-import unittest
-from opt.model.mcots import mcots, SMCT, get_expon_func
-from svox import Rays
-from references.svox2.opt.util.dataset import datasets
 datadir = '/hpc/users/CONNECT/haotianbai/work_dir/AdaptiveNerf/data/nerf_synthetic/drums'
-import numpy as np
-import torch
-import torch.nn.functional as F
-from einops import rearrange
-from torch.utils.tensorboard import SummaryWriter
 
 
 class TestMCOTS(unittest.TestCase):
     # python -m unittest test.test_mcots.TestMCOTS
     def setUp(self) -> None:
         self.dset = datasets["auto"](datadir, split='train')
-        self.writer = SummaryWriter('/hpc/users/CONNECT/haotianbai/work_dir/AdaptiveNerf/checkpoints/mcots/expand/init_1')
-        self.mcots = mcots(self.dset.scene_radius, self.dset.scene_center, 1e-5, sigma_thresh=1e-3, device="cuda", writer=self.writer, init_refine=1)
+        self.writer = SummaryWriter(
+            '/hpc/users/CONNECT/haotianbai/work_dir/AdaptiveNerf/checkpoints/mcots/test/init_1')
+        self.mcots = Mcost(self.dset.scene_radius, self.dset.scene_center, 1e-5,
+                           sigma_thresh=1e-3, device="cuda", writer=self.writer, init_refine=1)
         self.rays = self.dset.rays
         directions = self.rays.dirs
         norms = np.linalg.norm(directions, axis=-1, keepdims=True)
         viewdirs = directions / norms
-        self.rays = Rays(self.rays.origins.cuda(), self.rays.dirs.cuda(), viewdirs.cuda())
+        self.rays = Rays(self.rays.origins.cuda(),
+                         self.rays.dirs.cuda(), viewdirs.cuda())
         self.gt = self.dset.gt.cuda()
         return super().setUp()
-    
+
     def test_reward(self):
         self.mcots.expand([[0, 0, 0, 1]])
         B, H, W, _ = self.gt.shape
@@ -41,38 +44,39 @@ class TestMCOTS(unittest.TestCase):
 
     def test_select(self):
         self.mcots.expand([[0, 0, 0, 1]])
-        self.mcots.instant_reward = torch.rand(self.mcots.player.child.shape).cuda()
+        self.mcots.instant_reward = torch.rand(
+            self.mcots.player.child.shape).cuda()
         self.mcots.select(1)
         # python -m unittest test.test_mcots.TestMCOTS.test_select
-        
+
     def test_copyfromPlayer(self):
         t1 = SMCT(record=True)
         t2 = SMCT()
-        
-        t1._refine_at(0, [0,1,0])
-        t1._refine_at(1, [0,1,0])
-        
-        t2._refine_at(0, [0,0,1])
-        t2._refine_at(1, [0,0,0])  
-        
-        t2.data.data[0,0,0,1] += 1     
-        
-        self.mcots.recorder = t1 
-        self.mcots.player = t2 
-        
+
+        t1._refine_at(0, [0, 1, 0])
+        t1._refine_at(1, [0, 1, 0])
+
+        t2._refine_at(0, [0, 0, 1])
+        t2._refine_at(1, [0, 0, 0])
+
+        t2.data.data[0, 0, 0, 1] += 1
+
+        self.mcots.recorder = t1
+        self.mcots.player = t2
+
         self.mcots.copyFromPlayer()
-        
+
         print(t1.parent_depth)
-        print(t1.child.shape)        
-        print(t1.data[0,0,0,1])
+        print(t1.child.shape)
+        print(t1.data[0, 0, 0, 1])
         print(t1.n_internal)
         # python -m unittest test.test_mcots.TestMCOTS.test_copyfromPlayer
-    
+
     def test_gt(self):
         from torchvision.utils import save_image
         save_image(rearrange(self.gt[0], 'H W C -> C H W'), 'test.png')
         # python -m unittest test.test_mcots.TestMCOTS.test_gt
-        
+
     def test_prune(self):
         self.mcots.expand([[0, 0, 0, 1]])
         weights = torch.zeros(self.mcots.player.child.shape).cuda()
@@ -80,7 +84,7 @@ class TestMCOTS(unittest.TestCase):
         self.mcots.prune(delta, weights)
         print(self.mcots.player)
         # python -m unittest test.test_mcots.TestMCOTS.test_prune
-    
+
     def test_backtrace(self):
         from svox import VolumeRenderer
         self.mcots.expand([[0, 0, 0, 1]])
@@ -88,40 +92,60 @@ class TestMCOTS(unittest.TestCase):
         with self.mcots.player.accumulate_weights(op="sum") as accum:
             res = render.forward(self.rays, cuda=True, fast=False)
         self.mcots.instant_reward = accum.value
-        self.mcots.instant_reward/=self.mcots.instant_reward.sum()
+        self.mcots.instant_reward /= self.mcots.instant_reward.sum()
         print(self.mcots.player)
         idxs = torch.Tensor([[0, 0, 1, 0], [1, 0, 1, 1]]).cuda()
         self.mcots.backtrace(idxs)
         print(self.mcots.num_visits)
         # python -m unittest test.test_mcots.TestMCOTS.test_backtrace
-        
+
     def test_run_a_round(self):
         print(self.mcots.player)
-     
+
         self.mcots.run_a_round(self.rays, self.gt)
-        
+
         print(self.mcots.player)
         # print(self.mcots.player.parent_depth)
         print(self.mcots.player.child)
         print(self.mcots.num_visits)
         # python -m unittest test.test_mcots.TestMCOTS.test_run_a_round
-        
+
     def test_refine(self):
-        self.mcots = mcots(self.dset.scene_radius, self.dset.scene_center, 1e-5, sigma_thresh=1e-3, depth_limit=4, 
+        self.mcots = Mcost(self.dset.scene_radius, self.dset.scene_center, 1e-5, sigma_thresh=1e-3, depth_limit=4,
                            device="cuda", writer=self.writer, init_refine=0)
-        self.mcots.player.data.data[0, 0, 0, 1] +=2
-        self.mcots.player.data.data[0, 0, 1, 1] +=3
+        self.mcots.player.data.data[0, 0, 0, 1] += 2
+        self.mcots.player.data.data[0, 0, 1, 1] += 3
         sel = (*torch.Tensor([[0, 0, 0, 1], [0, 0, 1, 1]]).long().T, )
         self.mcots.player.refine(sel=sel)
         print(self.mcots.player.data.shape)
         print(self.mcots.player.data)
         # python -m unittest test.test_mcots.TestMCOTS.test_refine
+
     def test_time(self):
-        self.mcots = mcots(self.dset.scene_radius, self.dset.scene_center, 1e-5, sigma_thresh=1e-3, depth_limit=4, 
+        self.mcots = Mcost(self.dset.scene_radius, self.dset.scene_center, 1e-5, sigma_thresh=1e-3, depth_limit=4,
                            device="cuda", writer=self.writer, init_refine=3)
         with torch.autograd.profiler.profile(use_cuda=True) as prof:
             self.mcots.run_a_round(self.rays, self.gt)
         print(prof)
         # python -m unittest test.test_mcots.TestMCOTS.test_time
+
+    def test_render_perspective(self):
+        import svox
+        import imageio
+        device = 'cuda'
+        t = svox.N3Tree.load("/hpc/users/CONNECT/haotianbai/work_dir/AdaptiveNerf/checkpoints/mcots/test/ckpt_depth_2.npz", device=device)
+        r = svox.VolumeRenderer(t)
+
+        # Matrix copied from lego test set image 0
+        c2w = torch.tensor([[ -0.9999999403953552, 0.0, 0.0, 0.0 ],
+                            [ 0.0, -0.7341099977493286, 0.6790305972099304, 2.737260103225708 ],
+                            [ 0.0, 0.6790306568145752, 0.7341098785400391, 2.959291696548462 ],
+                            [ 0.0, 0.0, 0.0, 1.0 ],
+                    ], device=device)
+
+        with torch.no_grad():
+            im = r.render_persp(c2w, height=800, width=800, fx=1111.111).clamp_(0.0, 1.0)
+        imageio.imwrite('test.png',im.cpu())
+        # python -m unittest test.test_mcots.TestMCOTS.test_render_perspective
     def test_run(self):
         pass
