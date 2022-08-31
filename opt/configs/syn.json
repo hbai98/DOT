@@ -1,8 +1,8 @@
 {   
-    "lr_sigma": 1e0,
+    "lr_sigma": 1e-1,
     "lr_sigma_final": 5e-3,
     "lr_sigma_decay_steps": 1e5,
-    "lr_sigma_delay_steps": 0,
+    "lr_sigma_delay_steps": 1e3,
     "lr_sigma_delay_mult": 0.01,
     "lr_sh": 1e-2,
     "lr_sh_final": 5e-5,

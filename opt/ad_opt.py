@@ -90,7 +90,6 @@ group.add_argument('--lr_sh_delay_mult', type=float, default=1e-2)
 # END BG LRs
 
 group.add_argument('--rms_beta', type=float, default=0.95, help="RMSProp exponential averaging factor")
-group.add_argument('--print_every', type=int, default=1, help='print every')
 group.add_argument('--eval_every', type=int, default=1,
                    help='evaluate every x epochs')
 
@@ -265,14 +264,14 @@ def train_step():
   global gstep_id_base
   print('Train step')    
   stats = {"mse" : 0.0, "psnr" : 0.0, "invsqr_mse" : 0.0}
-  instant_weights = torch.zeros(player.child.size(), device=device)
   pre_delta_mse = 0
   pre_mse = 0
   counter = 0
   
   # stimulate 
   while True:
-    for iter_id, batch_begin in enumerate(range(0, epoch_size, args.batch_size)):
+    instant_weights = torch.zeros(player.child.size(), device=device)
+    for iter_id, batch_begin in enumerate(range(0, num_rays, args.batch_size)):
         gstep_id = iter_id + gstep_id_base
         lr_sigma = lr_sigma_func(gstep_id) * lr_sigma_factor
         lr_sh = lr_sh_func(gstep_id) * lr_sh_factor
@@ -283,7 +282,7 @@ def train_step():
             lr_sh = args.lr_sh * lr_sh_factor
             hessian_mse = args.hessian_mse * hessian_factor
             
-        batch_end = min(batch_begin + args.batch_size, epoch_size)
+        batch_end = min(batch_begin + args.batch_size, num_rays)
         batch_origins = dset.rays.origins[batch_begin: batch_end].to(device)
         batch_dirs = dset.rays.dirs[batch_begin: batch_end].to(device)
         batch_viewdir = viewdirs[batch_begin: batch_end].to(device)
@@ -298,41 +297,37 @@ def train_step():
 
         mse = F.mse_loss(rgb_gt, rgb_pred)
         mse.backward()
-        mcost.optim_basis_step(lr_sh, lr_sigma, beta=args.rms_beta, optim=args.sh_optim)
+        mcost.optim_basis_step(lr_sigma, lr_sh, beta=args.rms_beta, optim=args.sh_optim)
 
         mse_num : float = mse.detach().item()
         psnr = -10.0 * math.log10(mse_num)
         stats['mse'] += mse_num
         stats['psnr'] += psnr
         stats['invsqr_mse'] += 1.0 / mse_num ** 2
-    
+        
+        # log
+        summary_writer.add_scalar("train/lr_sh", lr_sh, global_step=gstep_id)
+        summary_writer.add_scalar("train/lr_sigma", lr_sigma, global_step=gstep_id)
+        summary_writer.add_scalar('train/thred_mse', hessian_mse, gstep_id)
+          
     # check if the model gets stable by hessian mse
     delta_mse = np.abs(stats['mse']-pre_mse)
     _hessian_mse = np.abs(delta_mse-pre_delta_mse)
     pre_mse= stats['mse']
     pre_delta_mse = delta_mse
-    
-    # log
-    if (iter_id + 1) % args.print_every == 0:
-      summary_writer.add_scalar("train/lr_sh", lr_sh, global_step=gstep_id)
-      summary_writer.add_scalar("train/lr_sigma", lr_sigma, global_step=gstep_id)
-      summary_writer.add_scalar('train/hessian_mse', _hessian_mse, gstep_id)
-      summary_writer.add_scalar('train/thred_mse', hessian_mse, gstep_id)
-      for stat_name in stats:
-        stat_val = stats[stat_name] / batches_per_epoch
-        summary_writer.add_scalar(f'train/{stat_name}', stat_val, gstep_id)         
-        
-    else:
-      for stat_name in stats:
-          stats[stat_name] = 0  
-    
-    gstep_id_base += batches_per_epoch
-            
+    summary_writer.add_scalar('train/hessian_mse', _hessian_mse, gstep_id) 
+         
+    for stat_name in stats:
+      stat_val = stats[stat_name] / rays_per_batch
+      summary_writer.add_scalar(f'train/{stat_name}', stat_val, gstep_id)
+      stats[stat_name] = 0 
+       
     if _hessian_mse < hessian_mse:
           counter += 1
           if counter > args.hessian_tolerance:
                 break
-  
+              
+    gstep_id_base += rays_per_batch
   
   # select 
   sample_k = int(max(1, player.n_leaves*args.sampling_rate))
@@ -348,8 +343,8 @@ with tqdm(total=args.depth_limit) as pbar:
   while True:
     dset.shuffle_rays()
     epoch_id += 1
-    epoch_size = dset.rays.origins.size(0)
-    batches_per_epoch = (epoch_size-1)//args.batch_size+1
+    num_rays = dset.rays.origins.size(0)
+    rays_per_batch = (num_rays-1)//args.batch_size+1
     player = mcost.player
     render = mcost._volumeRenderer()
     depth = player.get_depth()

@@ -27,8 +27,7 @@ class SMCT(N3Tree):
                  extra_data=None,
                  device="cuda",
                  dtype=torch.float32,
-                 init_sigma=0.1,
-                 map_location=None,
+                 map_location=None
                  ):
         """
         Construct N^3 Tree: spatial mento carlo tree
@@ -79,7 +78,7 @@ class SMCT(N3Tree):
 
         self.register_parameter("data",
                                 nn.Parameter(torch.empty(init_reserve, N, N, N, self.data_dim, dtype=dtype, device=device)))
-        nn.init.constant_(self.data[-1], init_sigma)
+        nn.init.constant_(self.data, 0.01)
 
         self.register_buffer("child", torch.zeros(
             init_reserve, N, N, N, dtype=torch.int32, device=device))
@@ -129,26 +128,68 @@ class SMCT(N3Tree):
         """
         Helper for increasing capacity
         """
-        cap_needed = max(cap_needed, int(self.capacity * (self.geom_resize_fact - 1.0)))
+        cap_needed = max(cap_needed, int(
+            self.capacity * (self.geom_resize_fact - 1.0)))
         may_oom = self.capacity + cap_needed > 1e7  # My CPU Memory is limited
         if may_oom:
+            print('Potential OOM: shift to cpu. It will be extremely slow.')
             # Potential OOM prevention hack
             self.data = nn.Parameter(self.data.cpu())
+
         self.data = nn.Parameter(torch.cat((self.data.data,
-                        torch.zeros((cap_needed, *self.data.data.shape[1:]),
-                                dtype=self.data.dtype,
-                                device=self.data.device)), dim=0))
-        if may_oom:
-            self.data = nn.Parameter(self.data.to(device=self.child.device))
+                                            torch.zeros((cap_needed, *self.data.data.shape[1:]),
+                                                        dtype=self.data.dtype,
+                                                        device=self.data.device)), dim=0))
+
         self.child = torch.cat((self.child,
                                 torch.zeros((cap_needed, *self.child.shape[1:]),
-                                   dtype=self.child.dtype,
-                                   device=self.data.device)))
+                                            dtype=self.child.dtype,
+                                            device=self.data.device)))
         self.parent_depth = torch.cat((self.parent_depth,
-                                torch.zeros((cap_needed, *self.parent_depth.shape[1:]),
-                                   dtype=self.parent_depth.dtype,
-                                   device=self.data.device)))
+                                       torch.zeros((cap_needed, *self.parent_depth.shape[1:]),
+                                                   dtype=self.parent_depth.dtype,
+                                                   device=self.data.device)))
 
+    def _refine_at(self, intnode_idx, xyzi):
+        """
+        Advanced: refine specific leaf node. Mostly for testing purposes.
+
+        :param intnode_idx: index of internal node for identifying leaf
+        :param xyzi: tuple of size 3 with each element in :code:`{0, ... N-1}`
+                    in xyz orde rto identify leaf within internal node
+
+        """
+        if self._lock_tree_structure:
+            raise RuntimeError("Tree locked")
+        assert min(xyzi) >= 0 and max(xyzi) < self.N
+        if self.parent_depth[intnode_idx, 1] >= self.depth_limit:
+            return
+
+        xi, yi, zi = xyzi
+        if self.child[intnode_idx, xi, yi, zi] != 0:
+            # Already has child
+            return
+
+        resized = False
+        filled = self.n_internal
+        if filled >= self.capacity:
+            self._resize_add_cap(1)
+            resized = True
+
+        self.child[filled] = 0
+        self.child[intnode_idx, xi, yi, zi] = filled - intnode_idx
+        depth = self.parent_depth[intnode_idx, 1] + 1
+        self.parent_depth[filled, 0] = self._pack_index(torch.tensor(
+            [[intnode_idx, xi, yi, zi]], dtype=torch.int32))[0]
+        self.parent_depth[filled, 1] = depth
+        # the data is initalized as zero for furhter processing(expansion)
+        # self.data.data[filled, :, :, :] = self.data.data[intnode_idx, xi, yi, zi]
+        # the data is kept as original for further inferencing
+        # self.data.data[intnode_idx, xi, yi, zi] = 0
+        self._n_internal += 1
+        self._invalidate()
+        return resized
+    
 
 
 class Mcost(nn.Module):
@@ -230,7 +271,6 @@ class Mcost(nn.Module):
             vals, idxs = torch.topk(p_val, k)
             idxs = self.player._all_leaves()[idxs]
             return idxs.long()
-    
         if self.policy == 'pareot':
             # self.backtrace(idxs, reward)
             pass
@@ -262,9 +302,10 @@ class Mcost(nn.Module):
        return VolumeRenderer(self.player, step_size=self.step_size,
                                 sigma_thresh=self.sigma_thresh, stop_thresh=self.stop_thresh)
     
-    def getReward(self, rays, gt, lr_sh_func, delta_func, cuda=True, fast=False):
-
-        render = self._volumeRenderer()
+    def getReward(self, rays, gt, lr_basis_func, delta_func, cuda=True, fast=False):
+    
+        render = VolumeRenderer(self.player, step_size=self.step_size,
+                                sigma_thresh=self.sigma_thresh, stop_thresh=self.stop_thresh)
         total_rays = rays.origins.size(0)
         B, H, W, C = gt.shape
         batch_size = H*W*5
@@ -300,7 +341,7 @@ class Mcost(nn.Module):
                 rgb_gt = gt[batch_begin:batch_end]
                 ray = Rays(batch_origins, batch_dirs, batch_viewdir)
 
-                lr = lr_sh_func(self.gstep_id*lr_factor)
+                lr = lr_basis_func(self.gstep_id*lr_factor)
                 thred_mse = delta_func(self.gstep_id)
 
                 with self.player.accumulate_weights(op="sum") as accum:
@@ -308,11 +349,11 @@ class Mcost(nn.Module):
 
                 val = accum.value
                 val /= val.sum()
-
+                
                 mse = F.mse_loss(rgb_gt, res)
                 self.player.zero_grad()
                 mse.backward()
-                self.optim_basis_step(lr)
+                self.optim_basis_step(lr,lr)
 
                 vals += val
                 # Stats
@@ -366,8 +407,8 @@ class Mcost(nn.Module):
         return res
 
     def run_a_round(self, rays, gt):
-
-        lr_basis = 1e-1
+    
+        lr_basis = 1e0
         lr_basis_final = 5e-4
         lr_basis_delay_steps = 0
         lr_basis_delay_mult = 1e-2
@@ -379,9 +420,9 @@ class Mcost(nn.Module):
         delta_data_end = 5e-5
         delta_data_decay_steps = 1e5
 
-        sample_rate_init = 5e-1
-        sample_rate_end = 1e-1
-        delta_data_decay_steps = 1e5
+        sample_rate_init = 1e-1
+        sample_rate_end = 1e-2
+        delta_data_decay_steps = 1e4
 
         explore_exploit_end = 1e-1
 
@@ -390,7 +431,7 @@ class Mcost(nn.Module):
         delta_sample_rate_func = get_expon_func(sample_rate_init, sample_rate_end, lr_basis_delay_steps,
                                                 lr_basis_delay_mult, delta_data_decay_steps)
         delta_explore_exploit = get_expon_func(self.explore_exploit, explore_exploit_end, lr_basis_delay_steps,
-                                               lr_basis_delay_mult, delta_data_decay_steps)
+                                               lr_basis_delay_mult, 1e4)
 
         self.writer.add_scalar(
             f'train/num_nodes', self.player.n_leaves, self.gstep_id)
@@ -419,32 +460,26 @@ class Mcost(nn.Module):
                 # end.record()
                 # torch.cuda.synchronize()
                 # print(f'getReward:{start.elapsed_time(end)}')
-
+                
                 depth = self.player.get_depth()
-
-                sigma = torch.nan_to_num(_SOFTPLUS_M1(self.player[:, -1]))
-                self.writer.add_histogram(
-                    f'train/sigma_dist_{self.gstep_id}', sigma, 0)
+                
+                sigma = torch.nan_to_num(_SOFTPLUS_M1(self.player[:,-1]))
+                self.writer.add_histogram(f'train/sigma_dist_{self.gstep_id}', sigma , 0)
                 sel = (*self.player._all_leaves().T, )
-                self.writer.add_scalar(f'sigma/ctb_1', self.instant_reward[sel][sigma < 1].sum(
-                )/self.instant_reward[sel].sum(), self.gstep_id)
-                self.writer.add_scalar(f'sigma/ctb_1e-1', self.instant_reward[sel][sigma < 0.1].sum(
-                )/self.instant_reward[sel].sum(), self.gstep_id)
-                self.writer.add_scalar(f'sigma/ctb_1e-2', self.instant_reward[sel][sigma < 0.01].sum(
-                )/self.instant_reward[sel].sum(), self.gstep_id)
-                self.writer.add_scalar(
-                    f'sigma/num_1', (sigma < 1).nonzero().size(0)/sigma.size(0), self.gstep_id)
-                self.writer.add_scalar(
-                    f'sigma/num_1e-1', (sigma < 0.1).nonzero().size(0)/sigma.size(0), self.gstep_id)
-                self.writer.add_scalar(
-                    f'sigma/num_1e-2', (sigma < 0.01).nonzero().size(0)/sigma.size(0), self.gstep_id)
+                self.writer.add_scalar(f'sigma/ctb_1', self.instant_reward[sel][sigma<1].sum()/self.instant_reward[sel].sum() , self.gstep_id)
+                self.writer.add_scalar(f'sigma/ctb_1e-1', self.instant_reward[sel][sigma<0.1].sum()/self.instant_reward[sel].sum() , self.gstep_id)
+                self.writer.add_scalar(f'sigma/ctb_1e-2', self.instant_reward[sel][sigma<0.01].sum()/self.instant_reward[sel].sum() , self.gstep_id)
+                self.writer.add_scalar(f'sigma/num_1',(sigma<1).nonzero().size(0)/sigma.size(0), self.gstep_id)
+                self.writer.add_scalar(f'sigma/num_1e-1',(sigma<0.1).nonzero().size(0)/sigma.size(0), self.gstep_id)
+                self.writer.add_scalar(f'sigma/num_1e-2',(sigma<0.01).nonzero().size(0)/sigma.size(0), self.gstep_id)
+
 
                 # select
                 # start = torch.cuda.Event(enable_timing=True)
                 # end = torch.cuda.Event(enable_timing=True)
                 # start.record()
-                idxs = self.select(k,self.instant_reward)
-                # end.record(
+                idxs = self.select(k, self.instant_reward)
+                # end.record()
                 # torch.cuda.synchronize()
                 # print(f'select:{start.elapsed_time(end)}')
                 # expand
@@ -511,30 +546,37 @@ class Mcost(nn.Module):
         # res = self.reward[sel] + self.explore_exploit * \
         #     self.instant_reward[sel]/(1+self.num_visits[sel])
         # res = self.reward[sel] + self.explore_exploit*self.instant_reward[sel]
-   
+      
 
-    def optim_basis_step(self, lr: float, beta: float=0.9, epsilon: float = 1e-8,
+    def optim_basis_step(self, lr_sigma: float, lr_sh: float, beta: float=0.9, epsilon: float = 1e-8,
                          optim: str = 'rmsprop'):
         """
         Execute RMSprop/SGD step on SH
         """
+        
+        data = self.player.data
+        
         assert (
-            _C is not None and self.player.data.is_cuda
+            _C is not None and data.is_cuda
         ), "CUDA extension is currently required for optimizers"
 
+        
         if optim == 'rmsprop':
-            if self.basis_rms is None or self.basis_rms.shape != self.player.data.shape:
+            if self.basis_rms is None or self.basis_rms.shape != data.shape:
                 del self.basis_rms
-                self.basis_rms = torch.zeros_like(self.player.data.data)
-            self.basis_rms.mul_(beta).addcmul_(self.player.data.grad, self.player.data.grad, value = 1.0 - beta)
+                self.basis_rms = torch.zeros_like(data.data)
+            self.basis_rms.mul_(beta).addcmul_(data.grad, data.grad, value = 1.0 - beta)
             denom = self.basis_rms.sqrt().add_(epsilon)
-            self.player.data.data.addcdiv_(self.player.data.grad, denom, value=-lr)
+            data.data[...,-1].addcdiv_(data.grad[...,-1], denom[...,-1], value=-lr_sigma)
+            data.data[...,:-1].addcdiv_(data.grad[...,:-1], denom[...,:-1], value=-lr_sh)
+            
         elif optim == 'sgd':
-            self.player.data.grad.mul_(lr)
-            self.player.data.data -= self.player.data.grad
+            data.grad[...,-1].mul_(lr_sigma)
+            data.grad[...,:-1].mul_(lr_sh)
+            data.data -=data.grad
         else:
             raise NotImplementedError(f'Unsupported optimizer {optim}')
-        self.player.data.grad.zero_()
+        data.grad.zero_()
 
 
 
