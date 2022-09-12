@@ -18,10 +18,8 @@ class TestMCOTS(unittest.TestCase):
     # python -m unittest test.test_mcots.TestMCOTS
     def setUp(self) -> None:
         self.dset = datasets["auto"](datadir, split='train')
-        self.writer = SummaryWriter(
-            '/hpc/users/CONNECT/haotianbai/work_dir/AdaptiveNerf/checkpoints/mcots/test/init_1')
         self.mcots = Mcost(self.dset.scene_radius, self.dset.scene_center, 1e-5,
-                           sigma_thresh=1e-3, device="cuda", writer=self.writer, init_refine=1)
+                           sigma_thresh=1e-3, device="cuda",  init_refine=1)
         self.rays = self.dset.rays
         directions = self.rays.dirs
         norms = np.linalg.norm(directions, axis=-1, keepdims=True)
@@ -43,7 +41,7 @@ class TestMCOTS(unittest.TestCase):
         # python -m unittest test.test_mcots.TestMCOTS.test_reward
 
     def test_select(self):
-        self.mcots.expand([[0, 0, 0, 1]])
+        self.mcots.expand(torch.tensor([[0, 0, 0, 1]]))
         self.mcots.instant_reward = torch.rand(
             self.mcots.player.child.shape).cuda()
         self.mcots.select(1)
@@ -78,10 +76,15 @@ class TestMCOTS(unittest.TestCase):
         # python -m unittest test.test_mcots.TestMCOTS.test_gt
 
     def test_prune(self):
-        self.mcots.expand([[0, 0, 0, 1]])
-        weights = torch.zeros(self.mcots.player.child.shape).cuda()
-        delta = 0.05
-        self.mcots.prune(delta, weights)
+        # self.mcots.expand(torch.tensor([[0, 0, 0, 1]]))
+        print(self.mcots.player.child)
+        print(self.mcots.player.child[0,0,0,1])
+        print(self.mcots.player.child[1,0,1,1])        
+        
+        print(self.mcots.player.child[(*torch.tensor([0,0,0,1]).long(),)])
+        # weights = torch.zeros(self.mcots.player.child.shape).cuda()
+        # delta = 0.05
+        # self.mcots.prune(delta, weights)
         print(self.mcots.player)
         # python -m unittest test.test_mcots.TestMCOTS.test_prune
 
@@ -147,5 +150,15 @@ class TestMCOTS(unittest.TestCase):
             im = r.render_persp(c2w, height=800, width=800, fx=1111.111).clamp_(0.0, 1.0)
         imageio.imwrite('test.png',im.cpu())
         # python -m unittest test.test_mcots.TestMCOTS.test_render_perspective
+        
+    def test_policy_pareto(self):
+        from svox import VolumeRenderer
+        self.mcots.expand([[0, 0, 0, 1]])
+        render = VolumeRenderer(self.mcots.player, 1e-5)
+        with self.mcots.player.accumulate_weights(op="sum") as accum:
+            res = render.forward(self.rays, cuda=True, fast=False)
+        
+    
+    
     def test_run(self):
         pass

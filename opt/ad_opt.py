@@ -34,7 +34,7 @@ group.add_argument('--sh_dim', type=int, default=9, help='SH/learned basis dimen
 # group.add_argument('--background_reso', type=int, default=512, help='Background resolution')
 roup = parser.add_argument_group("optimization")
 group.add_argument('--batch_size', type=int, default=
-                     640000*5,
+                     640000,
                      #100000,
                      #  2000,
                    help='batch size')
@@ -55,7 +55,13 @@ group.add_argument('--hessian_mse_delay_mult', type=float, default=1e-2)#1e-4)#1
 group.add_argument('--hessian_tolerance', type=int, default=5,
                    help="the limit number of counter for hessian mse check")
 
-group.add_argument('--sampling_rate', type=float, default=1e-1, help='Sampling rate on child nodes.')
+group.add_argument('--sampling_rate', type=float, default=1e-1, help='Sampling on child nodes.')
+group.add_argument('--sampling_rate_final', type=float, default=3e-1)
+group.add_argument('--sampling_rate_decay_steps', type=int, default=250000)
+group.add_argument('--sampling_rate_delay_steps', type=int, default=0,
+                   help="Reverse cosine steps (0 means disable)")
+group.add_argument('--sampling_rate_delay_mult', type=float, default=1e-2)#1e-4)#1e-4)
+
 group.add_argument('--sh_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="SH optimizer")
 group.add_argument('--lr_sh', type=float, default=
                     1e-2,
@@ -113,6 +119,8 @@ group.add_argument('--policy',
                    choices=['pareto', 'greedy'],
                    default='greedy',
                    help='strategy to apply')
+group.add_argument('--pareto_signals_num', type=int,
+                   default=1)
 group.add_argument('--thresh_type',
                     choices=["weight", "sigma"],
                     default="weight",
@@ -178,6 +186,8 @@ dset_test = datasets[args.dataset_type](
 
 global_start_time = datetime.now()
 
+pareto_signals = ['ctb', 'var']
+
 mcost = Mcost(center=dset.scene_center,
               radius=dset.scene_radius,
               step_size=args.step_size,
@@ -188,6 +198,7 @@ mcost = Mcost(center=dset.scene_center,
               data_format='SH'+str(args.sh_dim),
               policy=args.policy,
               device=device,
+              p_sel=pareto_signals[:args.pareto_signals_num]
               )
 
 lr_sigma_func = get_expon_lr_func(args.lr_sigma, args.lr_sigma_final, args.lr_sigma_delay_steps,
@@ -196,9 +207,14 @@ lr_sh_func = get_expon_lr_func(args.lr_sh, args.lr_sh_final, args.lr_sh_delay_st
                                args.lr_sh_delay_mult, args.lr_sh_decay_steps)
 hessian_func = get_expon_lr_func(args.hessian_mse, args.hessian_mse_final, args.hessian_mse_delay_steps,
                                args.hessian_mse_delay_mult, args.hessian_mse_decay_steps)
+sampling_rate_func = get_expon_lr_func(args.sampling_rate, args.sampling_rate_final, args.sampling_rate_delay_steps,
+                               args.sampling_rate_delay_mult, args.sampling_rate_decay_steps)
+
+
 lr_sigma_factor = 1.0
 lr_sh_factor = 1.0
 hessian_factor = 1.0
+sampling_factor = 1.0
 
 epoch_id = -1
 gstep_id_base = 0
@@ -270,12 +286,16 @@ def train_step():
   
   # stimulate 
   while True:
-    instant_weights = torch.zeros(player.child.size(), device=device)
+    instant_weights = torch.zeros(player.n_leaves, device=device)
+    pre_batch_mse = None
+    weights = []
+    
     for iter_id, batch_begin in enumerate(range(0, num_rays, args.batch_size)):
         gstep_id = iter_id + gstep_id_base
         lr_sigma = lr_sigma_func(gstep_id) * lr_sigma_factor
         lr_sh = lr_sh_func(gstep_id) * lr_sh_factor
         hessian_mse = hessian_func(gstep_id) * hessian_factor
+        sampling_rate = sampling_rate_func(gstep_id) * sampling_factor
         
         if not args.decay:
             lr_sigma = args.lr_sigma * lr_sigma_factor
@@ -291,9 +311,6 @@ def train_step():
         
         with player.accumulate_weights(op="sum") as accum:
           rgb_pred = render.forward(rays, cuda=device=='cuda')    
-                  
-        weight = accum.value
-        instant_weights += weight/weight.sum()
 
         mse = F.mse_loss(rgb_gt, rgb_pred)
         mse.backward()
@@ -305,11 +322,20 @@ def train_step():
         stats['psnr'] += psnr
         stats['invsqr_mse'] += 1.0 / mse_num ** 2
         
+        weight = accum.value
+        sel = [*mcost.player._all_leaves().long().T,]
+        weight = weight[sel]
+        # mse reduction
+        instant_weights += mcost._reward(weight)
+        # weight varibility 
+        weights.append(weight/weight.sum())
+
         # log
         summary_writer.add_scalar("train/lr_sh", lr_sh, global_step=gstep_id)
         summary_writer.add_scalar("train/lr_sigma", lr_sigma, global_step=gstep_id)
         summary_writer.add_scalar('train/thred_mse', hessian_mse, gstep_id)
-          
+        summary_writer.add_scalar('train/sampling_rate', sampling_rate, gstep_id)
+        
     # check if the model gets stable by hessian mse
     delta_mse = np.abs(stats['mse']-pre_mse)
     _hessian_mse = np.abs(delta_mse-pre_delta_mse)
@@ -323,14 +349,17 @@ def train_step():
       stats[stat_name] = 0 
        
     if _hessian_mse < hessian_mse:
-          counter += 1
-          if counter > args.hessian_tolerance:
-                break
+      counter += 1
+      if counter > args.hessian_tolerance:
+        # calculate val_weights
+        var_weights = torch.var(torch.stack(weights, dim=0), dim=0)
+        instant_weights = torch.stack([instant_weights, var_weights], dim=-1)
+        break
               
     gstep_id_base += rays_per_batch
   
   # select 
-  sample_k = int(max(1, player.n_leaves*args.sampling_rate))
+  sample_k = int(max(1, player.n_leaves*sampling_rate))
   idxs = mcost.select(sample_k, instant_weights)
   
   summary_writer.add_scalar(f'train/num_nodes', player.n_leaves, gstep_id)

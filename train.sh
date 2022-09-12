@@ -15,7 +15,7 @@ module load cuda-11.4
 source activate
 conda activate Adnerf
 
-experiment_name=mcots/test
+experiment_name=mcots/test/reward_var
 config=opt/configs/syn.json
 CKPT_DIR=checkpoints/${experiment_name}
 data_dir=data/nerf_synthetic/drums
