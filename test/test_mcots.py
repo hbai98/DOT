@@ -160,5 +160,15 @@ class TestMCOTS(unittest.TestCase):
         
     
     
-    def test_run(self):
-        pass
+    def test_priority_queue(self):
+        d = dict()
+        a = ['1', '2']
+        for i in a:
+            for j in range(int(i)+2, int(i), -1): 
+                d.setdefault(j, []).append(i)
+
+        print (d)  # prints {1: ['1'], 2: ['1', '2'], 3: ['2']}
+        print(d.keys())
+        print(d.values())
+        print(sorted(d.items()))
+        # python -m unittest test.test_mcots.TestMCOTS.test_priority_queue

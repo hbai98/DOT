@@ -28,5 +28,5 @@
     "sampling_rate_decay_steps":1e4,
 
     "policy":"pareto",
-    "pareto_signals_num":2
+    "pareto_signals_num":1
 }

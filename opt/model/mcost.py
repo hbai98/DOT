@@ -1,20 +1,13 @@
-from turtle import forward
 import torch.nn as nn
 from svox import N3Tree, VolumeRenderer
-from svox.renderer import NDCConfig, _VolumeRenderFunction, _rays_spec_from_rays
+from svox.renderer import NDCConfig
 
 import torch
 from svox.helpers import DataFormat
 from warnings import warn
-from einops import rearrange
-import torch.nn.functional as F
-from tqdm import tqdm
-from svox import Rays
 from svox.svox import _get_c_extension
-import math
-import gc
 import numpy as np
-from collections import namedtuple
+from collections import defaultdict
 
 _C = _get_c_extension()
 
@@ -274,20 +267,23 @@ class Mcost(nn.Module):
             device = self.player.data.device
             D = torch.Tensor([reward.size(-1)])
             res = []
-            reward = reward[:,:len(self.p_sel)]    
+            reward = reward[:,:len(self.p_sel)]  
             
-            def DFS(todo):
+            def DFS(todo, idxs_pq):
                 # print(f'todo:{todo}')
                 while True:
-                    if len(todo) == 0 or len(res) >= k:
+                    if len(todo)==0 or len(res) >= k:
                         break
+                    
                     root = todo.pop(0)
+                    idxs_pq.update({k:idxs_pq[k]-1 for k in idxs_pq if idxs_pq[k]!=0})
+                    
                     nid = self.player._pack_index(torch.tensor(root).unsqueeze(0))
                     if self.player.child[(*root,)]==0:
                         res.append(root)
                     else:
                         # internal nodes 
-                        sel = (self.player.parent_depth[:,0]==nid.to(device)).nonzero(as_tuple=True)[0].item()
+                        sel = (self.player.parent_depth[1:,0]==nid.to(device)).nonzero(as_tuple=True)[0].item()
                         n_visits = self.num_visits[sel]+1
                         if len(self.p_sel) == 1:
                             p_val = self.reward[sel].to(device)+\
@@ -302,31 +298,51 @@ class Mcost(nn.Module):
                         _add = (torch.ones(idxs.size(0), 1)*sel).to(device)
                         idxs = torch.cat([_add, idxs], dim=-1).int().tolist()
                         # pick one at random 
+                        # insert into a priority queue ranked by the depth of tree
+                        depth = self.player.parent_depth[sel,1].item()
                         _sel = np.random.randint(len(idxs))
-                        todo.insert(0, idxs.pop(_sel))
-                        todo.extend(idxs)
-                        DFS(todo)
+                        
+                        # print(todo)
+                        # print(depth)
+                        # print(idxs_pq)
+                        # insert 
+                        todo.insert(0, idxs.pop(_sel)) # deep-first
+                        todo[idxs_pq[depth+1]:idxs_pq[depth+1]-1] = idxs # children on the next layer
+                        # update idxs after insertion
+                        if (depth+2) not in idxs_pq:
+                            idxs_pq[depth+2]=idxs_pq[depth+1] 
+                        idxs_pq.update({k:idxs_pq[k]+len(idxs) for k in idxs_pq if k > depth+1})
+                        # print(todo)
+                        # print(depth)
+                        # print(idxs_pq)
+                                          
+            idxs_pq = dict()
+            for k in range(1, self.player.get_depth()+2):
+                idxs_pq[k] = 0         
             # select all leaves of the root of the tree 
             sel = torch.nonzero(torch.ones(1, self.player.N, self.player.N, self.player.N))[1:].tolist()
-            DFS(sel)
+            idxs_pq[2] = self.player.N**3
+            # create the priority queue by a dict
+            DFS(sel, idxs_pq)
             sel = torch.tensor(res)
             self.backtrace(reward, sel)
             return sel
     
     def backtrace(self, reward, idxs):
-        print(reward)
         idxs_ = idxs.clone()
-        sel = [*self.player._all_leaves().long().T,]
-        # initalize rewards on leaves 
-        self.reward[sel] += (reward-self.reward[sel])/(1+self.num_visits[sel].unsqueeze(-1))
-        pre = None
+        # initalize rewards on selected leaves 
+        idxs_sel = self.player._pack_index(idxs_)
+        idxs_leaves = self.player._pack_index(self.player._all_leaves())
+        sel_ = [l in idxs_sel for l in idxs_leaves]
+        pre = reward[sel_]
 
         while True:
             sel = (*idxs_.long().T,)
             self.num_visits[sel] += 1
+            # print(pre.shape)
+            # print(self.reward[sel].shape)
             # back-propagate rewards
-            if pre is not None:
-                self.reward[sel] += (pre-self.reward[sel])/(1+self.num_visits[sel].unsqueeze(-1))
+            self.reward[sel] += (pre-self.reward[sel])/(1+self.num_visits[sel].unsqueeze(-1))
             pre = self.reward[sel]
 
             nid = idxs_[:, 0]
