@@ -1,7 +1,7 @@
 #!/bin/sh		
 #BSUB -J nerf
 #BSUB -n 4     
-#BSUB -m g-node01
+#BSUB -m g-node03
 #BSUB -q gpu         
 #BSUB -gpgpu 1
 #BSUB -o out.%J      
@@ -15,7 +15,7 @@ module load cuda-11.4
 source activate
 conda activate Adnerf
 
-experiment_name=mcots/test/reward_longTerm
+experiment_name=mcots/test/int_1/greedy_thresh
 config=opt/configs/syn.json
 CKPT_DIR=checkpoints/${experiment_name}
 data_dir=data/nerf_synthetic/drums
@@ -25,7 +25,7 @@ echo Launching experiment ${expriment_name}
 echo CKPT $CKPT_DIR
 echo LOGFILE $NOHUP_FILE
 # python -m unittest test.test_mcots.TestMCOTS.test_run_a_round
-python opt/ad_opt.py -t $CKPT_DIR ${data_dir} -c ${config} > $NOHUP_FILE 2>&1  
+python opt/ad_opt.py -t $CKPT_DIR ${data_dir} -c ${config}  > $NOHUP_FILE 2>&1  
 echo DETACH
 
 # dataset='office_home'

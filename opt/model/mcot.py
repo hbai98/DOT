@@ -7,8 +7,8 @@ from svox.helpers import DataFormat
 from warnings import warn
 from svox.svox import _get_c_extension
 import numpy as np
-from collections import defaultdict
-
+from .utils import pareto_2d
+from einops import rearrange
 _C = _get_c_extension()
 
 
@@ -117,6 +117,18 @@ class SMCT(N3Tree):
             flat = torch.div(flat, self.N, rounding_mode='trunc')
         return torch.stack((flat, t[2], t[1], t[0]), dim=-1)
 
+    def _invalidate(self):
+        self._ver += 1
+        self._last_all_leaves = None
+        self._last_frontier = None
+        self._last_all_inter = None
+
+    def _all_internals(self):
+        if self._last_all_inter is None:
+            self._last_all_inter = (self.child[
+                :self.n_internal] != 0).nonzero(as_tuple=False).cpu()
+        return self._last_all_inter
+
     def _resize_add_cap(self, cap_needed):
         """
         Helper for increasing capacity
@@ -182,10 +194,9 @@ class SMCT(N3Tree):
         self._n_internal += 1
         self._invalidate()
         return resized
-    
 
 
-class Mcost(nn.Module):
+class MCOT(nn.Module):
     def __init__(self,
                  radius,
                  center,
@@ -200,6 +211,7 @@ class Mcost(nn.Module):
                  dtype=torch.float32,
                  policy='greedy',
                  p_sel=['ctb'],
+                 density_softplus=True,
                  ):
         """Main mcts based octree data structure
 
@@ -215,23 +227,23 @@ class Mcost(nn.Module):
                          are depth 9. :code:`max_depth` applies to the same
                          depth values.
         """
-        super(Mcost, self).__init__()
+        super(MCOT, self).__init__()
         # the octree is always kept to record the overview
         # the sh, density value are updated constantly
         self.radius = radius
         self.center = center
         self.data_format = data_format
-        self.player = SMCT(radius=radius,
-                           center=center,
-                           data_format=data_format,
-                           init_refine=init_refine,
-                           data_dim=data_dim,
-                           depth_limit=depth_limit,
-                           dtype=dtype)
+        self.tree = SMCT(radius=radius,
+                         center=center,
+                         data_format=data_format,
+                         init_refine=init_refine,
+                         data_dim=data_dim,
+                         depth_limit=depth_limit,
+                         dtype=dtype)
         self.step_size = step_size
         self.dtype = dtype
-        n_nodes = self.player.n_internal
-        N = self.player.N
+        n_nodes = self.tree.n_internal
+        N = self.tree.N
 
         self.round = 0
         self.gstep_id = 0
@@ -241,6 +253,7 @@ class Mcost(nn.Module):
         self.stop_thresh = stop_thresh
         self.policy = policy
         self.p_sel = p_sel
+        self.density_softplus = density_softplus
 
         if policy == 'pareto':
             # the n_visits for mcst
@@ -249,90 +262,120 @@ class Mcost(nn.Module):
             self.register_buffer("reward", torch.zeros(
                 n_nodes, N, N, N, len(p_sel), dtype=dtype, device=device))
 
-    def select(self, k, reward):
+    def merge(self, nids, reward):
+        device = self.tree.data.device
+        nids=nids.to(device)
+        idxs = [f in nids for f in self.tree._frontier]
+        self.tree.merge(idxs)
+        
+
+    def select_front(self, sel):
+        # sel is indexes of leaves
+        # discover the fronts whose all children are included in sel
+        N = self.tree.N
+        nids, chunks = torch.unique(sel[:, 0], return_counts=True)
+        nids = nids[chunks == N**3]
+        return nids
+
+    def select(self, max_sel, reward, rw_idxs):
         """Deep first search based on policy value: from root to the tail.
         Select the top k nodes.
 
         reward:  leaves, objectives
         the instant reward is conputed as: weight*exp(-mse)
         """
-        
+
         if self.policy == 'greedy':
-            sel = [*self.player._all_leaves().long().T,]
-            p_val = reward[sel, 0] # only MSE
-            vals, idxs = torch.topk(p_val, k)
-            idxs = self.player._all_leaves()[idxs]
+            p_val = reward[:, 0]  # only MSE
+            sel = min(p_val.size(0), max_sel)
+            vals, idxs = torch.topk(p_val, sel)
+            idxs = rw_idxs[idxs]
             return idxs.long()
         elif self.policy == 'pareto':
-            device = self.player.data.device
+            device = self.tree.data.device
             D = torch.Tensor([reward.size(-1)])
             res = []
-            reward = reward[:,:len(self.p_sel)]  
-            
+            reward = reward[:, :len(self.p_sel)]
+
             def DFS(todo, idxs_pq):
                 # print(f'todo:{todo}')
                 while True:
-                    if len(todo)==0 or len(res) >= k:
+                    if len(todo) == 0 or len(res) >= max_sel:
+                        # print(f'num_leaves:{self.player.n_leaves}')
+                        print(f'Select {len(res)}/{max_sel}')
+                        # print(len(todo))
                         break
-                    
+
                     root = todo.pop(0)
-                    idxs_pq.update({k:idxs_pq[k]-1 for k in idxs_pq if idxs_pq[k]!=0})
-                    
-                    nid = self.player._pack_index(torch.tensor(root).unsqueeze(0))
-                    if self.player.child[(*root,)]==0:
+                    idxs_pq.update(
+                        {k: idxs_pq[k]-1 for k in idxs_pq if idxs_pq[k] != 0})
+
+                    nid = self.tree._pack_index(
+                        torch.tensor(root).unsqueeze(0))
+                    if self.tree.child[(*root,)] == 0:
                         res.append(root)
                     else:
-                        # internal nodes 
-                        sel = (self.player.parent_depth[1:,0]==nid.to(device)).nonzero(as_tuple=True)[0].item()
+                        # internal nodes
+                        sel = (self.tree.parent_depth[1:, 0] == nid.to(
+                            device)).nonzero(as_tuple=True)[0].item()
                         n_visits = self.num_visits[sel]+1
                         if len(self.p_sel) == 1:
-                            p_val = self.reward[sel].to(device)+\
-                                torch.sqrt(torch.log((n_visits.sum())).to(device)/(self.num_visits[sel]+1).to(device))
+                            p_val = self.reward[sel].to(device) +\
+                                torch.sqrt(torch.log((n_visits.sum())).to(
+                                    device)/(self.num_visits[sel]+1).to(device))
                         else:
                             p_val = self.reward[sel].to(device) +\
-                                torch.sqrt((4*torch.log((n_visits.sum()).to(device))+torch.log(D).to(device))/(2*(self.num_visits[sel]+1).to(device)))
-                        p_val = p_val.squeeze(0) #[2,2,2,p_sel]
+                                torch.sqrt((4*torch.log((n_visits.sum()).to(device))+torch.log(
+                                    D).to(device))/(2*(self.num_visits[sel]+1).to(device)))
+                        p_val = p_val.squeeze(0)  # [2,2,2,p_sel]
                         # pareto optimal set (equals the intersection)
-                        idxs = [torch.nonzero(p_val[...,d]==p_val[...,d].max()) for d in range(p_val.size(-1))]
-                        idxs = torch.cat(idxs).unique(dim=0).to(device)
+                        if p_val.size(-1) == 1:
+                            idxs = torch.argmax(p_val, dim=-1).to(device)
+                        else:
+                            idxs = pareto_2d(
+                                rearrange(p_val.numpy(), 'X Y Z N -> (X Y Z) N'))
+                            idxs = self.tree._unpack_index(idxs)
                         _add = (torch.ones(idxs.size(0), 1)*sel).to(device)
                         idxs = torch.cat([_add, idxs], dim=-1).int().tolist()
-                        # pick one at random 
+                        # pick one at random
                         # insert into a priority queue ranked by the depth of tree
-                        depth = self.player.parent_depth[sel,1].item()
+                        depth = self.tree.parent_depth[sel, 1].item()
                         _sel = np.random.randint(len(idxs))
-                        
+
                         # print(todo)
                         # print(depth)
                         # print(idxs_pq)
-                        # insert 
-                        todo.insert(0, idxs.pop(_sel)) # deep-first
-                        todo[idxs_pq[depth+1]:idxs_pq[depth+1]-1] = idxs # children on the next layer
+                        # insert
+                        todo.insert(0, idxs.pop(_sel))  # deep-first
+                        # children on the next layer
+                        todo[idxs_pq[depth+1]:idxs_pq[depth+1]-1] = idxs
                         # update idxs after insertion
                         if (depth+2) not in idxs_pq:
-                            idxs_pq[depth+2]=idxs_pq[depth+1] 
-                        idxs_pq.update({k:idxs_pq[k]+len(idxs) for k in idxs_pq if k > depth+1})
+                            idxs_pq[depth+2] = idxs_pq[depth+1]
+                        idxs_pq.update({k: idxs_pq[k]+len(idxs)
+                                       for k in idxs_pq if k > depth+1})
                         # print(todo)
                         # print(depth)
                         # print(idxs_pq)
-                                          
+
             idxs_pq = dict()
-            for k in range(1, self.player.get_depth()+2):
-                idxs_pq[k] = 0         
-            # select all leaves of the root of the tree 
-            sel = torch.nonzero(torch.ones(1, self.player.N, self.player.N, self.player.N))[1:].tolist()
-            idxs_pq[2] = self.player.N**3
+            for k in range(1, self.tree.get_depth()+2):
+                idxs_pq[k] = 0
+            # select all leaves of the root of the tree
+            sel = torch.nonzero(torch.ones(1, self.tree.N, self.tree.N, self.tree.N))[
+                1:].tolist()
+            idxs_pq[2] = self.tree.N**3
             # create the priority queue by a dict
             DFS(sel, idxs_pq)
             sel = torch.tensor(res)
             self.backtrace(reward, sel)
             return sel
-    
+
     def backtrace(self, reward, idxs):
         idxs_ = idxs.clone()
-        # initalize rewards on selected leaves 
-        idxs_sel = self.player._pack_index(idxs_)
-        idxs_leaves = self.player._pack_index(self.player._all_leaves())
+        # initalize rewards on selected leaves
+        idxs_sel = self.tree._pack_index(idxs_)
+        idxs_leaves = self.tree._pack_index(self.tree._all_leaves())
         sel_ = [l in idxs_sel for l in idxs_leaves]
         pre = reward[sel_]
 
@@ -342,7 +385,8 @@ class Mcost(nn.Module):
             # print(pre.shape)
             # print(self.reward[sel].shape)
             # back-propagate rewards
-            self.reward[sel] += (pre-self.reward[sel])/(1+self.num_visits[sel].unsqueeze(-1))
+            self.reward[sel] += (pre-self.reward[sel]) / \
+                (1+self.num_visits[sel].unsqueeze(-1))
             pre = self.reward[sel]
 
             nid = idxs_[:, 0]
@@ -353,72 +397,75 @@ class Mcost(nn.Module):
             if nid.size(0) == 0:
                 break
             else:
-                idxs_ = self.player._unpack_index(
-                    self.player.parent_depth[nid.long(), 0])
-        
-        
-        
+                idxs_ = self.tree._unpack_index(
+                    self.tree.parent_depth[nid.long(), 0])
+
     def _reward(self, rewards):
         res = rewards/rewards.sum()
         return res
 
     def _volumeRenderer(self):
-       return VolumeRenderer(self.player, step_size=self.step_size,
-                                sigma_thresh=self.sigma_thresh, stop_thresh=self.stop_thresh)
+        return VolumeRenderer(self.tree, step_size=self.step_size,
+                              sigma_thresh=self.sigma_thresh, stop_thresh=self.stop_thresh, density_softplus=self.density_softplus)
 
     def expand(self, idxs):
         # group expansion
         i = idxs.size(0)
         idxs = (*idxs.long().T,)
-        res = self.player.refine(sel=idxs)
-        
+        res = self.tree.refine(sel=idxs)
+
+        # # clean up memory on internal nodes' data
+        # sel = [*self.tree._all_internals().T.long(),]
+        # self.tree.data[sel] = None
+
         if self.policy == 'pareto':
             self.num_visits = torch.cat((self.num_visits,
                                         torch.zeros((i, *self.num_visits.shape[1:]),
                                                     dtype=self.num_visits.dtype,
                                                     device=self.num_visits.device)
-                                        ))
+                                         ))
             self.reward = torch.cat((self.reward,
                                     torch.zeros((i, *self.reward.shape[1:]),
                                                 dtype=self.reward.dtype,
                                                 device=self.reward.device)
-                                    ))
+                                     ))
         return res
 
-
-    def optim_basis_step(self, lr_sigma: float, lr_sh: float, beta: float=0.9, epsilon: float = 1e-8,
+    def optim_basis_step(self, lr_sigma: float, lr_sh: float, beta: float = 0.9, epsilon: float = 1e-8,
                          optim: str = 'rmsprop'):
         """
         Execute RMSprop/SGD step on SH
         """
-        
-        data = self.player.data
-        
+
+        data = self.tree.data
+
         assert (
             _C is not None and data.is_cuda
         ), "CUDA extension is currently required for optimizers"
 
-        
         if optim == 'rmsprop':
             if self.basis_rms is None or self.basis_rms.shape != data.shape:
                 del self.basis_rms
                 self.basis_rms = torch.zeros_like(data.data)
-            self.basis_rms.mul_(beta).addcmul_(data.grad, data.grad, value = 1.0 - beta)
+            self.basis_rms.mul_(beta).addcmul_(
+                data.grad, data.grad, value=1.0 - beta)
             denom = self.basis_rms.sqrt().add_(epsilon)
-            data.data[...,-1].addcdiv_(data.grad[...,-1], denom[...,-1], value=-lr_sigma)
-            data.data[...,:-1].addcdiv_(data.grad[...,:-1], denom[...,:-1], value=-lr_sh)
-            
+            data.data[..., -1].addcdiv_(data.grad[..., -1],
+                                        denom[..., -1], value=-lr_sigma)
+            data.data[..., :-1].addcdiv_(data.grad[..., :-1],
+                                         denom[..., :-1], value=-lr_sh)
+
         elif optim == 'sgd':
-            data.grad[...,-1].mul_(lr_sigma)
-            data.grad[...,:-1].mul_(lr_sh)
-            data.data -=data.grad
+            data.grad[..., -1].mul_(lr_sigma)
+            data.grad[..., :-1].mul_(lr_sh)
+            data.data -= data.grad
         else:
             raise NotImplementedError(f'Unsupported optimizer {optim}')
         data.grad.zero_()
 
 
 def get_expon_func(
-    lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000):
+        lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000):
     """
     Continuous learning rate decay function. Adapted from JaxNeRF
 
@@ -472,7 +519,6 @@ class HessianCheck():
                 return True
         self.pre_delta = delta
         return False
-
 
 
 # class PruneCheck():
@@ -533,7 +579,3 @@ class VolumeRenderer(VolumeRenderer):
                          ndc, min_comp, max_comp, density_softplus, rgb_padding)
         self.sigma_thresh = sigma_thresh
         self.stop_thresh = stop_thresh
-
-
-def _SOFTPLUS_M1(x):
-    return torch.log(torch.exp(x-1)+1)

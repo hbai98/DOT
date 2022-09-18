@@ -47,7 +47,24 @@ def setup_render_opts(opt, args):
     opt.last_sample_opaque = args.last_sample_opaque
     opt.near_clip = args.near_clip
     # opt.use_spheric_clip = args.use_spheric_clip
-    
+
+# borrow from https://github.com/Ragheb2464/preto-front/blob/master/2d.py
+def pareto_2d(data):
+    from operator import itemgetter
+    sorted_data = sorted(data, key=itemgetter(0, 1), reverse=True)
+    pareto_idx = list()
+    pareto_idx.append(0)
+    cutt_off = sorted_data[0][1]
+    for i in range(1, len(sorted_data)):
+        if sorted_data[i][1] > cutt_off:
+            pareto_idx.append(i)
+            cutt_off = sorted_data[i][1]
+    return pareto_idx
+
+def threshold_li(data):
+    from skimage.filters.thresholding import threshold_li
+    return threshold_li(data)
+
 def posenc(
     x: torch.Tensor,
     cov_diag: Optional[torch.Tensor],
@@ -107,3 +124,5 @@ def posenc(
         four_feat = torch.cat([x] + [four_feat], dim=-1)
     return four_feat
 
+def _SOFTPLUS_M1(x):
+    return torch.log(torch.exp(x-1)+1)
