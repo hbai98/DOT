@@ -1,3 +1,4 @@
+from secrets import choice
 import torch
 import torch.cuda
 import torch.optim
@@ -12,7 +13,7 @@ import numpy as np
 import math
 import argparse
 from model.mcot import MCOT
-from model.utils import _SOFTPLUS_M1, threshold_li
+from model.utils import _SOFTPLUS_M1, threshold
 from util.dataset import datasets
 from util.util import get_expon_lr_func
 from util import adConfig
@@ -132,22 +133,34 @@ group.add_argument('--log-video', action='store_true', default=False)
 
 group = parser.add_argument_group("mcot experiments")
 group.add_argument('--policy',
-                   choices=['pareto', 'greedy'],
+                   choices=['pareto', 'greedy', 'hybrid'],
                    default='greedy',
                    help='strategy to apply')
+group.add_argument('--hybrid_to_pareto',
+                   type=int,
+                   default=5,
+                   help='after how many epochs the policy is changed to make step-wise decisions.')
 group.add_argument('--pareto_signals_num', type=int,
                    default=1)
 group.add_argument('--use_threshold', type=bool,
                    default=True,
                    )
 group.add_argument('--thresh_type',
-                   choices=["weight", "sigma"],
+                   choices=["weight", "sigma", "num_visits"],
                    default="weight",
                    help='threshold type')
+group.add_argument('--thresh_epochs',
+                   type=int,
+                   default=2,
+                   help='threshold after every epoches')
 group.add_argument('--thresh_method',
-                   choices=["li"],
-                   default="li",
-                   help='threshold method')
+                   choices=['li','local', 'otsu', 'yen'],
+                   default='li',
+                   help='dynamic threshold algorithms')
+group.add_argument('--record_tree',
+                   type=bool,
+                   default=True,
+                   help='whether to record number of visits and rewards on nodes.')
 group.add_argument('--depth_limit', type=int,
                    default=10,
                    help='Maximum number of tree depth')
@@ -212,6 +225,11 @@ global_start_time = datetime.now()
 
 pareto_signals = ['ctb', 'var']
 
+if args.policy == 'hybrid':
+    policy = 'greedy'
+else:
+    policy = args.policy
+
 mcot = MCOT(center=dset.scene_center,
             radius=dset.scene_radius,
             step_size=args.step_size,
@@ -220,10 +238,11 @@ mcot = MCOT(center=dset.scene_center,
             sigma_thresh=args.sigma_thresh,
             stop_thresh=args.stop_thresh,
             data_format='SH'+str(args.sh_dim),
-            policy=args.policy,
+            policy=policy,
             device=device,
             p_sel=pareto_signals[:args.pareto_signals_num],
-            density_softplus=args.density_softplus
+            density_softplus=args.density_softplus,
+            record=args.record_tree
             )
 
 lr_sigma_func = get_expon_lr_func(args.lr_sigma, args.lr_sigma_final, args.lr_sigma_delay_steps,
@@ -234,7 +253,6 @@ hessian_func = get_expon_lr_func(args.hessian_mse, args.hessian_mse_final, args.
                                  args.hessian_mse_delay_mult, args.hessian_mse_decay_steps)
 sampling_rate_func = get_expon_lr_func(args.sampling_rate, args.sampling_rate_final, args.sampling_rate_delay_steps,
                                        args.sampling_rate_delay_mult, args.sampling_rate_decay_steps)
-
 
 lr_sigma_factor = 1.0
 lr_sh_factor = 1.0
@@ -400,31 +418,42 @@ def train_step():
         gstep_id_base += rays_per_batch
         
     leaves = mcot.tree._all_leaves()
+    sel = leaves
     # threshold
     if args.use_threshold != 0:
-        if args.thresh_type == 'sigma':
-            sel = [*leaves.long().T, ]
-            sigma = mcot.tree.data[sel][..., -1]
-            if args.density_softplus:
-                sigma = _SOFTPLUS_M1(sigma)
-            thred = threshold_li(sigma.cpu().detach().numpy())
-            sel = leaves[sigma<thred]
-            nids = mcot.select_front(sel) 
-        elif args.thresh_type == 'weight':
-            pass
-    
-    # merge
-    mcot.merge(nids, instant_weights)
-    # merged subtrees would not be reselected
-    _ = sigma>=thred
-    sel = leaves[_]
-    instant_weights = instant_weights[_]
+        if epoch_id%args.thresh_epochs==0:
+            if args.thresh_type == 'sigma':
+                sel = [*leaves.long().T, ]
+                sigma = mcot.tree.data[sel][..., -1]
+                if args.density_softplus:
+                    sigma = _SOFTPLUS_M1(sigma)
+                thred = threshold(sigma, args.thresh_method)
+                sel = leaves[sigma<thred]
+                nids = mcot.select_front(sel) 
+                # merge
+                mcot.merge(nids, instant_weights)
+                # merged subtrees would not be reselected
+                _ = sigma>=thred
+                sel = leaves[_]
+                instant_weights = instant_weights[_]
+            elif args.thresh_type == 'num_visits':
+                assert args.record_tree, 'Pruning by num_visits is only accessible when record_tree option is true.'
+                
+                
+            elif args.thresh_type == 'weight':
+                pass
     
     # print(f'sampling_rate:{sampling_rate}')
+    
+    if args.policy=='hybrid' and args.record_tree and epoch_id == args.hybrid_to_pareto:
+        print('Change the policy on selection...')
+        mcot.policy = 'pareto'
     # select
     sample_k = int(max(1, player.n_leaves*sampling_rate))
     idxs = mcot.select(sample_k, instant_weights, sel)
     # print(f'{idxs.size(0)}/{sample_k}')
+    if args.record_tree:
+        mcot.backtrace(instant_weights, sel)
 
     summary_writer.add_scalar(f'train/num_nodes', player.n_leaves, gstep_id)
     summary_writer.add_scalar(f'train/depth', player.get_depth(), gstep_id)

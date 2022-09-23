@@ -3,7 +3,8 @@ import torch.nn as nn
 import torch
 from typing import Optional
 import numpy as np
-from typing import Union
+from skimage.filters.thresholding import threshold_li, threshold_local, threshold_otsu, threshold_yen
+
 
 class TreeConv(nn.Module):
     def __init__(self, in_channels, out_channels, degree, act='gelu', inplace=True):
@@ -61,9 +62,19 @@ def pareto_2d(data):
             cutt_off = sorted_data[i][1]
     return pareto_idx
 
-def threshold_li(data):
-    from skimage.filters.thresholding import threshold_li
-    return threshold_li(data)
+def threshold(data_, method):
+    data = data_.cpu().detach().numpy()
+    device = data_.device
+    data = np.isfinite(data)
+    
+    if method == 'li':
+        return torch.tensor(threshold_li(data), device=device)
+    elif method=='local':
+        return torch.tensor(threshold_local(data), device=device)
+    elif method=='otsu':
+        return torch.tensor(threshold_otsu(data), device=device)
+    elif method=='yen':
+        return torch.tensor(threshold_yen(data), device=device)
 
 def posenc(
     x: torch.Tensor,

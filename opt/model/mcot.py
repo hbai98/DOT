@@ -212,6 +212,7 @@ class MCOT(nn.Module):
                  policy='greedy',
                  p_sel=['ctb'],
                  density_softplus=True,
+                 record=True,
                  ):
         """Main mcts based octree data structure
 
@@ -254,9 +255,9 @@ class MCOT(nn.Module):
         self.policy = policy
         self.p_sel = p_sel
         self.density_softplus = density_softplus
+        self.record = record
 
-        if policy == 'pareto':
-            # the n_visits for mcst
+        if record:
             self.register_buffer("num_visits", torch.zeros(
                 n_nodes, N, N, N, dtype=torch.int32, device=device))
             self.register_buffer("reward", torch.zeros(
@@ -264,10 +265,9 @@ class MCOT(nn.Module):
 
     def merge(self, nids, reward):
         device = self.tree.data.device
-        nids=nids.to(device)
+        nids = nids.to(device)
         idxs = [f in nids for f in self.tree._frontier]
         self.tree.merge(idxs)
-        
 
     def select_front(self, sel):
         # sel is indexes of leaves
@@ -290,7 +290,7 @@ class MCOT(nn.Module):
             sel = min(p_val.size(0), max_sel)
             vals, idxs = torch.topk(p_val, sel)
             idxs = rw_idxs[idxs]
-            return idxs.long()
+            return idxs
         elif self.policy == 'pareto':
             device = self.tree.data.device
             D = torch.Tensor([reward.size(-1)])
@@ -318,23 +318,30 @@ class MCOT(nn.Module):
                         # internal nodes
                         sel = (self.tree.parent_depth[1:, 0] == nid.to(
                             device)).nonzero(as_tuple=True)[0].item()
+                        # root as parent
                         n_visits = self.num_visits[sel]+1
+                        n_visits = n_visits.unsqueeze(-1).to(device)
+
                         if len(self.p_sel) == 1:
                             p_val = self.reward[sel].to(device) +\
                                 torch.sqrt(torch.log((n_visits.sum())).to(
-                                    device)/(self.num_visits[sel]+1).to(device))
+                                    device)/n_visits)
+
                         else:
                             p_val = self.reward[sel].to(device) +\
                                 torch.sqrt((4*torch.log((n_visits.sum()).to(device))+torch.log(
-                                    D).to(device))/(2*(self.num_visits[sel]+1).to(device)))
-                        p_val = p_val.squeeze(0)  # [2,2,2,p_sel]
-                        # pareto optimal set (equals the intersection)
-                        if p_val.size(-1) == 1:
-                            idxs = torch.argmax(p_val, dim=-1).to(device)
+                                    D).to(device))/(2*n_visits))
+
+                        # pareto optimal set (equals thenbvm intersection)
+                        # p_sel  [2,2,2,p_sel] 
+                        if len(self.p_sel) == 1:
+                            p_val = p_val.squeeze(-1)
+                            idxs = (p_val == p_val.max()).nonzero().to(device)
                         else:
                             idxs = pareto_2d(
-                                rearrange(p_val.numpy(), 'X Y Z N -> (X Y Z) N'))
-                            idxs = self.tree._unpack_index(idxs)
+                                rearrange(p_val.cpu().detach().numpy(), 'X Y Z N -> (X Y Z) N'))
+                            idxs = self.tree._unpack_index(
+                                torch.tensor(idxs).to(device))
                         _add = (torch.ones(idxs.size(0), 1)*sel).to(device)
                         idxs = torch.cat([_add, idxs], dim=-1).int().tolist()
                         # pick one at random
@@ -368,11 +375,12 @@ class MCOT(nn.Module):
             # create the priority queue by a dict
             DFS(sel, idxs_pq)
             sel = torch.tensor(res)
-            self.backtrace(reward, sel)
             return sel
 
     def backtrace(self, reward, idxs):
         idxs_ = idxs.clone()
+        # reward
+        reward = reward[:, :len(self.p_sel)]
         # initalize rewards on selected leaves
         idxs_sel = self.tree._pack_index(idxs_)
         idxs_leaves = self.tree._pack_index(self.tree._all_leaves())
@@ -418,7 +426,7 @@ class MCOT(nn.Module):
         # sel = [*self.tree._all_internals().T.long(),]
         # self.tree.data[sel] = None
 
-        if self.policy == 'pareto':
+        if self.record:
             self.num_visits = torch.cat((self.num_visits,
                                         torch.zeros((i, *self.num_visits.shape[1:]),
                                                     dtype=self.num_visits.dtype,
@@ -497,73 +505,6 @@ def get_expon_func(
         return delay_rate * log_lerp
 
     return helper
-
-
-class HessianCheck():
-    def __init__(self, tolerance=5, min_delta=0):
-
-        self.tolerance = tolerance
-        self.min_delta = min_delta
-        self.counter = 0
-        self.early_stop = False
-        self.pre_delta = 0
-        self.hessian = None
-
-    def __call__(self, cur, pre):
-        delta = np.abs(pre - cur)
-        self.hessian = np.abs(delta-self.pre_delta)
-        if self.hessian < self.min_delta:
-            self.counter += 1
-            if self.counter >= self.tolerance:
-                self.early_stop = True
-                return True
-        self.pre_delta = delta
-        return False
-
-
-# class PruneCheck():
-#     def __init__(self, tolerance=5, min_delta=0):
-#         self.tolerance = tolerance
-#         self.min_delta = min_delta
-#         self.counter = dict()
-#         self.num_prune = 0
-
-#         self.pre_frontier = None
-#         self.pre_reward = None
-
-#     def __call__(self, player, reward):
-#         if self.pre_frontier is None or self.pre_reward is None:
-#             self.pre_frontier = player._frontier.cpu().numpy()
-#             self.pre_reward = reward
-#             return
-
-#         preFron = self.pre_frontier
-#         curFron = player._frontier.cpu().numpy()
-#         # only check the frontier nodes in intersection
-#         nids = torch.Tensor(np.intersect1d(preFron, curFron)).long()
-#         if len(nids) == 0:
-#             return
-
-#         parent_sel = (*player._unpack_index(player.parent_depth[nids, 0]).long().T,)
-#         pre_reward = self.pre_reward[parent_sel]
-#         cur_reward = reward[parent_sel]
-#         delta = torch.abs(pre_reward-cur_reward)
-
-#         for i, nid in enumerate(nids):
-#             if delta[i] < self.min_delta:
-#                 if nid in self.counter:
-#                     self.counter[nid] +=1
-#                     if self.counter[nid] >= self.tolerance:
-#                         self.player.merge(nid == curFron)
-#                         self.num_prune += 1
-#                         self.counter[nid] = 0
-#                 else:
-#                     self.counter[nid] = 1
-
-#         self.pre_frontier = player._frontier.cpu().numpy()
-#         self.pre_reward = reward
-#         return
-
 
 class VolumeRenderer(VolumeRenderer):
     def __init__(self, tree, step_size: float = 0.001,

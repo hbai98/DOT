@@ -1,7 +1,7 @@
 #!/bin/sh		
 #BSUB -J nerf
 #BSUB -n 4     
-#BSUB -m g-node03
+#BSUB -m g-node02
 #BSUB -q gpu         
 #BSUB -gpgpu 1
 #BSUB -o out.%J      
@@ -15,7 +15,7 @@ module load cuda-11.4
 source activate
 conda activate Adnerf
 
-experiment_name=mcots/test/int_1/greedy_thresh
+experiment_name=mcots/perf/thresh_target/init_6/weight
 config=opt/configs/syn.json
 CKPT_DIR=checkpoints/${experiment_name}
 data_dir=data/nerf_synthetic/drums

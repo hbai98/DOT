@@ -1,10 +1,10 @@
 {   
-    "lr_sigma": 1e-1,
+    "lr_sigma": 5e-1,
     "lr_sigma_final": 5e-4,
     "lr_sigma_decay_steps": 1e5,
     "lr_sigma_delay_steps": 0,
     "lr_sigma_delay_mult": 0.01,
-    "lr_sh": 1e-1,
+    "lr_sh": 5e-2,
     "lr_sh_final": 5e-4,
     "lr_sh_decay_steps": 1e5,
     "lr_sh_delay_steps": 0,
@@ -15,25 +15,29 @@
     "hessian_mse_delay_steps": 0,
     "hessian_mse_decay_steps":1e5,
 
-    "init_refine":1,
-    "depth_limit":11,
+    "init_refine":6,
+    "depth_limit":12,
 
     "sigma_thresh":1e-3,
     "stop_thresh":0,
     "use_threshold":true,
-    "thresh_type":"sigma",
+    "thresh_type":"weight",
+    "thresh_method":"yen",
+    "thresh_epochs":1,
 
     "density_softplus":true,
 
     "step_size":1e-5,
     "batch_size":3200000,  
-    "sampling_rate":1e-1,
-    "sampling_rate_final":5e-1,
-    "sampling_rate_decay_steps":1e4,
+    "sampling_rate":4e-1,
+    "sampling_rate_final":6e-1,
+    "sampling_rate_decay_steps":2e3,
 
     "log_sigma":true,
     "log_weight":true,
 
     "policy":"greedy",
+    "record_tree":false,
     "pareto_signals_num":1
+
 }
