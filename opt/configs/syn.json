@@ -15,7 +15,7 @@
     "hessian_mse_delay_steps": 0,
     "hessian_mse_decay_steps":1e5,
 
-    "init_refine":6,
+    "init_refine":1,
     "depth_limit":12,
 
     "sigma_thresh":1e-3,

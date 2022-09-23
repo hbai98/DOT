@@ -424,25 +424,47 @@ def train_step():
         if epoch_id%args.thresh_epochs==0:
             if args.thresh_type == 'sigma':
                 sel = [*leaves.long().T, ]
-                sigma = mcot.tree.data[sel][..., -1]
+                val = mcot.tree[sel][..., -1]
                 if args.density_softplus:
-                    sigma = _SOFTPLUS_M1(sigma)
-                thred = threshold(sigma, args.thresh_method)
-                sel = leaves[sigma<thred]
-                nids = mcot.select_front(sel) 
-                # merge
-                mcot.merge(nids, instant_weights)
-                # merged subtrees would not be reselected
-                _ = sigma>=thred
-                sel = leaves[_]
-                instant_weights = instant_weights[_]
+                    val = _SOFTPLUS_M1(sigma)
+                    val = torch.nan_to_num(val, nan=0)
+                thred = threshold(val, args.thresh_method)
+    
             elif args.thresh_type == 'num_visits':
                 assert args.record_tree, 'Pruning by num_visits is only accessible when record_tree option is true.'
                 
-                
             elif args.thresh_type == 'weight':
-                pass
-    
+            # only use rewards without vars 
+                instant_weights = instant_weights[:,0]
+                val = instant_weights
+                val = torch.nan_to_num(val, nan=0)
+                thred = threshold(val, args.thresh_method)   
+                         
+            while True:
+                sel = leaves[val<thred]
+                nids = mcot.select_front(sel) 
+                # print(nids.shape)
+                if nids.size(0) == 0:
+                    break
+                # merge
+                mcot.merge(nids)
+                
+                # merged subtrees would not be reselected
+                reduced_sel = [l in nids for l in leaves[:, 0]]
+                n = mcot.tree.N**3
+                reduced = val[reduced_sel].reshape(-1, n)
+                reduced = reduced.mean(-1)
+                
+                parent_sel = mcot.tree._unpack_index(nids)
+                leaves = torch.cat((leaves[val>=thred], parent_sel))
+                instant_weights = torch.cat((val[val>=thred], reduced))
+                
+                if args.thresh_type == 'weight':
+                    val = instant_weights
+                elif args.thresh_type == 'sigma':
+                    val = mcot.tree[(*leaves.long().T, )][..., -1]
+                    
+                val = torch.nan_to_num(val, nan=0)
     # print(f'sampling_rate:{sampling_rate}')
     
     if args.policy=='hybrid' and args.record_tree and epoch_id == args.hybrid_to_pareto:
@@ -450,10 +472,10 @@ def train_step():
         mcot.policy = 'pareto'
     # select
     sample_k = int(max(1, player.n_leaves*sampling_rate))
-    idxs = mcot.select(sample_k, instant_weights, sel)
+    idxs = mcot.select(sample_k, instant_weights, leaves)
     # print(f'{idxs.size(0)}/{sample_k}')
     if args.record_tree:
-        mcot.backtrace(instant_weights, sel)
+        mcot.backtrace(instant_weights, leaves)
 
     summary_writer.add_scalar(f'train/num_nodes', player.n_leaves, gstep_id)
     summary_writer.add_scalar(f'train/depth', player.get_depth(), gstep_id)
