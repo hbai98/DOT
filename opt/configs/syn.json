@@ -22,8 +22,8 @@
     "stop_thresh":0,
     "use_threshold":true,
     "thresh_type":"weight",
-    "thresh_method":"yen",
-    "thresh_epochs":1,
+    "thresh_method":"otsu",
+    "thresh_epochs":4,
 
     "density_softplus":true,
 
@@ -32,6 +32,8 @@
     "sampling_rate":4e-1,
     "sampling_rate_final":6e-1,
     "sampling_rate_decay_steps":2e3,
+
+    "use_variance":false,
 
     "log_sigma":true,
     "log_weight":true,

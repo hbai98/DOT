@@ -65,12 +65,9 @@ def pareto_2d(data):
 def threshold(data_, method):
     data = data_.cpu().detach().numpy()
     device = data_.device
-    data = np.isfinite(data)
     
     if method == 'li':
         return torch.tensor(threshold_li(data), device=device)
-    elif method=='local':
-        return torch.tensor(threshold_local(data), device=device)
     elif method=='otsu':
         return torch.tensor(threshold_otsu(data), device=device)
     elif method=='yen':
