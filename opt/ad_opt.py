@@ -344,7 +344,6 @@ def train_step():
     pre_mse = 0
     counter = 0
     sampling_rate = sampling_rate_func(gstep_id) * sampling_factor
-
     # stimulate
     while True:
         # important to make the learned properties stable.
@@ -357,7 +356,8 @@ def train_step():
         for iter_id, batch_begin in enumerate(range(0, num_rays, args.batch_size)):
             gstep_id = iter_id + gstep_id_base
             batch_end = min(batch_begin + args.batch_size, num_rays)
-            batch_origins = dset.rays.origins[batch_begin: batch_end].to(device)
+            batch_origins = dset.rays.origins[batch_begin: batch_end].to(
+                device)
             batch_dirs = dset.rays.dirs[batch_begin: batch_end].to(device)
             batch_viewdir = viewdirs[batch_begin: batch_end].to(device)
             rgb_gt = dset.rays.gt[batch_begin: batch_end]
@@ -371,6 +371,7 @@ def train_step():
                 rgb_pred = render.forward(rays, cuda=device == 'cuda')
 
             mse = F.mse_loss(rgb_gt, rgb_pred)
+            mcot.tree.zero_grad()
             mse.backward()
             mcot.optim_basis_all_step(
                 lr_sigma, lr_sh, beta=args.rms_beta, optim=args.sh_optim)
@@ -424,65 +425,80 @@ def train_step():
 
         gstep_id_base += rays_per_batch
   # threshold
+   # the flag used to skip selection and expansion; to give more time to
+    # obtain stable properties.
     prune = False
-    if args.use_threshold:
-        if epoch_id == 1 or  epoch_id % args.thresh_epochs == 0:
-            prune = True
-            print('Prunning...')
-            if args.thresh_type == 'sigma':
-                sel = [*leaves.long().T, ]
-                val = mcot.tree.data[sel][..., -1]
+    if args.use_threshold and epoch_id % args.thresh_epochs == 0:
+        prune = True
+        if args.thresh_type == 'sigma':
+            sel = [*leaves.long().T, ]
+            val = mcot.tree.data[sel][..., -1]
+            if args.density_softplus:
+                val = _SOFTPLUS_M1(val)
+
+        elif args.thresh_type == 'num_visits':
+            assert args.record_tree, 'Pruning by num_visits is only accessible when record_tree option is true.'
+
+        elif args.thresh_type == 'weight':
+            val = instant_weights
+
+        val = torch.nan_to_num(val, nan=0)
+        thred = threshold(val, args.thresh_method)
+
+        print(f'Prunning at {thred}/{val.max()}')
+
+        while True:
+            sel = leaves[val < thred]
+            nids = mcot.select_front(sel)
+            if nids.size(0) == 0:
+                print(f'Prune 0/{leaves.size(0)}')
+                break
+            # print(nids.shape)
+            # print(f'nid:{nids.shape}')
+            _ = nids.size(0)*8
+            print(f'Prune {_}/{leaves.size(0)}')
+            mcot.merge(nids)
+
+            reduced_sel = [l in nids for l in leaves[:, 0]]
+            nids, idxs, counts = torch.unique(torch.tensor(
+                reduced_sel, device=device), return_inverse=True, return_counts=True)
+            reduced = torch.zeros(nids.size(
+                0), dtype=val.dtype, device=device).scatter_add_(0, idxs, val)
+            reduced /= counts
+            parent_sel = mcot.tree._unpack_index(
+                mcot.tree.parent_depth[nids, 0])
+
+            # print(leaves.shape)
+            # print(val.shape)
+            # print((leaves[val >= thred]).shape)
+            # print(parent_sel.shape)
+            # print((val[val >= thred].shape))
+            # print(reduced.shape)
+
+            leaves = torch.cat((leaves[val >= thred].to(device), parent_sel))
+            instant_weights = torch.cat((val[val >= thred], reduced))
+
+            # print(leaves.shape)
+            # print(instant_weights.shape)
+            # assert 0
+            if args.thresh_type == 'weight':
+                val = instant_weights
+            elif args.thresh_type == 'sigma':
+                val = mcot.tree.data[(*leaves.long().T, )][..., -1]
                 if args.density_softplus:
                     val = _SOFTPLUS_M1(val)
-                val = torch.nan_to_num(val, nan=0)
-                thred = threshold(val, args.thresh_method)
 
-            elif args.thresh_type == 'num_visits':
-                assert args.record_tree, 'Pruning by num_visits is only accessible when record_tree option is true.'
-
-            elif args.thresh_type == 'weight':
-                val = instant_weights
-                val = torch.nan_to_num(val, nan=0)
-                thred = threshold(val, args.thresh_method)
-
-            while True:
-                sel = leaves[val < thred]
-                nids = mcot.select_front(sel)
-                if nids.size(0) == 0:
-                    print(f'Prune 0/{leaves.size(0)}')
-                    break
-                # print(nids.shape)
-                # print(f'nid:{nids.shape}')
-                _ = nids.size(0)*8
-                print(f'Prune {_}/{leaves.size(0)}')
-
-                mcot.merge(nids)
-
-                reduced_sel = [l in nids for l in leaves[:, 0]]
-                n = mcot.tree.N**3
-                reduced = val[reduced_sel].reshape(-1, n)
-                reduced = reduced.sum(-1)
-                parent_sel = mcot.tree._unpack_index(
-                    mcot.tree.parent_depth[nids, 0])
-
-                leaves = torch.cat((leaves[val >= thred].to(device), parent_sel))
-                instant_weights = torch.cat((val[val >= thred], reduced))
-
-                if args.thresh_type == 'weight':
-                    val = instant_weights
-                elif args.thresh_type == 'sigma':
-                    val = mcot.tree.data[(*leaves.long().T, )][..., -1]
-
-                val = torch.nan_to_num(val, nan=0)
+            val = torch.nan_to_num(val, nan=0)
 
     if args.policy == 'hybrid' and args.record_tree and epoch_id == args.hybrid_to_pareto:
         print('Change the policy on selection...')
         mcot.policy = 'pareto'
 
     if not prune:
+        print('Start sampling...')
         sample_k = int(max(1, player.n_leaves*sampling_rate))
         idxs = mcot.select(sample_k, instant_weights, leaves)
-    # print(f'{idxs.size(0)}/{sample_k}')
+        # print(f'{idxs.size(0)}/{sample_k}')
         if args.record_tree:
             mcot.backtrace(instant_weights, leaves)
         mcot.expand(idxs)
@@ -504,6 +520,10 @@ def train_step():
 
 
 with tqdm(total=args.depth_limit) as pbar:
+    player = mcot.tree
+    depth = player.get_depth()
+    pbar.update(depth.item())
+
     while True:
         epoch_id += 1
         num_rays = dset.rays.origins.size(0)
@@ -511,8 +531,7 @@ with tqdm(total=args.depth_limit) as pbar:
         player = mcot.tree
         render = mcot._volumeRenderer()
         depth = player.get_depth()
-        pbar.update(depth.item())
-        
+
         if delta_depth != 0:
             # NOTE: the evaluation is launched when the tree depth is changed.
             eval_step()
