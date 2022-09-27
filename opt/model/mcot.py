@@ -194,7 +194,7 @@ class SMCT(N3Tree):
         self._n_internal += 1
         self._invalidate()
         return resized
-    
+
     # 'Frontier' operations (node merging/pruning)
     def merge(self, frontier_sel=None, op=torch.mean):
         """
@@ -236,6 +236,7 @@ class SMCT(N3Tree):
         self._n_free += nid.shape[0]
         self._invalidate()
         return True
+
 
 class MCOT(nn.Module):
     def __init__(self,
@@ -374,7 +375,7 @@ class MCOT(nn.Module):
                                     D).to(device))/(2*n_visits))
 
                         # pareto optimal set (equals thenbvm intersection)
-                        # p_sel  [2,2,2,p_sel] 
+                        # p_sel  [2,2,2,p_sel]
                         if len(self.p_sel) == 1:
                             p_val = p_val.squeeze(-1)
                             idxs = (p_val == p_val.max()).nonzero().to(device)
@@ -480,8 +481,36 @@ class MCOT(nn.Module):
                                      ))
         return res
 
-    def optim_basis_step(self, lr_sigma: float, lr_sh: float, beta: float = 0.9, epsilon: float = 1e-8,
-                         optim: str = 'rmsprop'):
+    def optim_basis_step(self, lr: float, beta: float = 0.9, epsilon: float = 1e-8,
+                             optim: str = 'rmsprop'):
+        """
+        Execute RMSprop/SGD step on SH
+        """
+        data = self.tree.data
+        
+        assert (
+            _C is not None and data.is_cuda
+        ), "CUDA extension is currently required for optimizers"
+
+        if optim == 'rmsprop':
+            if self.basis_rms is None or self.basis_rms.shape != data.shape:
+                del self.basis_rms
+                self.basis_rms = torch.zeros_like(data.data)
+            self.basis_rms.mul_(beta).addcmul_(
+                data.grad, data.grad, value=1.0 - beta)
+            denom = self.basis_rms.sqrt().add_(epsilon)
+            data.data.addcdiv_(
+                data.grad, denom, value=-lr)
+        elif optim == 'sgd':
+            data.grad.mul_(lr)
+            data.data -= data.grad
+        else:
+            raise NotImplementedError(f'Unsupported optimizer {optim}')
+
+        data.grad.zero_()
+
+    def optim_basis_all_step(self, lr_sigma: float, lr_sh: float, beta: float = 0.9, epsilon: float = 1e-8,
+                             optim: str = 'rmsprop'):
         """
         Execute RMSprop/SGD step on SH
         """
@@ -546,6 +575,7 @@ def get_expon_func(
         return delay_rate * log_lerp
 
     return helper
+
 
 class VolumeRenderer(VolumeRenderer):
     def __init__(self, tree, step_size: float = 0.001,

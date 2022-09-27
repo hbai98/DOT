@@ -56,7 +56,7 @@ def define_common_args(parser : argparse.ArgumentParser):
                          type=bool,
                          default=True,
                          help="Normalize using cameras, assuming a 360 capture (NSVF dataset only); only used if not normalize_by_bbox")
-    group.add_argument('--perm', action='store_true', default=False,
+    group.add_argument('--perm', action='store_true', default=True,
                          help='sample by permutation of rays (true epoch) instead of '
                               'uniformly random rays')
 
