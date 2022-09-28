@@ -15,7 +15,7 @@
     "hessian_mse_delay_steps": 0,
     "hessian_mse_decay_steps":1e5,
 
-    "init_refine":6,
+    "init_refine":1,
     "depth_limit":14,
 
     "sigma_thresh":1e-3,
@@ -24,6 +24,7 @@
     "thresh_type":"weight",
     "thresh_method":"li",
     "thresh_epochs":2,
+    "thresh_tol":0.8,
 
     "density_softplus":true,
 

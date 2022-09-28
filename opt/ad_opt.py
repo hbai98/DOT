@@ -159,6 +159,10 @@ group.add_argument('--thresh_method',
                    choices=['li', 'otsu', 'local'],
                    default='li',
                    help='dynamic threshold algorithms')
+group.add_argument('--thresh_tol',
+                   type=float,
+                   default=0.7,
+                   help='tolerance of threshold')
 group.add_argument('--record_tree',
                    type=bool,
                    default=True,
@@ -344,13 +348,14 @@ def train_step():
     pre_mse = 0
     counter = 0
     sampling_rate = sampling_rate_func(gstep_id) * sampling_factor
+    leaves = mcot.tree._all_leaves()
+    
     # stimulate
     while True:
         # important to make the learned properties stable.
         dset.shuffle_rays()
         # updata params
-        instant_weights = torch.zeros(player.n_leaves, device=device)
-        leaves = mcot.tree._all_leaves()
+        instant_weights = torch.zeros_like(player.child, device=device, dtype=player.data.dtype)
         weights = []
 
         for iter_id, batch_begin in enumerate(range(0, num_rays, args.batch_size)):
@@ -383,15 +388,16 @@ def train_step():
             stats['invsqr_mse'] += 1.0 / mse_num ** 2
 
             weight = accum.value
-            sel = [*mcot.tree._all_leaves().long().T, ]
-            weight = weight[sel]
+            # sel = [*mcot.tree._all_leaves().long().T, ]
+            # weight = weight[sel]
             # mse reduction
-            instant_weights += mcot._reward(weight)
+            instant_weights += weight
 
             if args.use_variance:
                 # weight varibility
                 weights.append(weight/weight.sum())
-
+                
+        instant_weights /= instant_weights.sum()
         # log
         summary_writer.add_scalar(
             "train/lr_sh", lr_sh, global_step=gstep_id)
@@ -428,45 +434,50 @@ def train_step():
    # the flag used to skip selection and expansion; to give more time to
     # obtain stable properties.
     prune = False
+    sel = (*leaves.long().T, )
+    
+    if args.thresh_type == 'sigma':
+        val = mcot.tree.data[sel][..., -1]
+        if args.density_softplus:
+            val = _SOFTPLUS_M1(val)
+    elif args.thresh_type == 'num_visits':
+        assert args.record_tree, 'Pruning by num_visits is only accessible when record_tree option is true.'
+    elif args.thresh_type == 'weight':
+        val = instant_weights[sel]
+    
+    val = torch.nan_to_num(val, nan=0)
+        
     if args.use_threshold and epoch_id % args.thresh_epochs == 0:
         prune = True
-        if args.thresh_type == 'sigma':
-            sel = [*leaves.long().T, ]
-            val = mcot.tree.data[sel][..., -1]
-            if args.density_softplus:
-                val = _SOFTPLUS_M1(val)
-
-        elif args.thresh_type == 'num_visits':
-            assert args.record_tree, 'Pruning by num_visits is only accessible when record_tree option is true.'
-
-        elif args.thresh_type == 'weight':
-            val = instant_weights
-
-        val = torch.nan_to_num(val, nan=0)
         thred = threshold(val, args.thresh_method)
 
         print(f'Prunning at {thred}/{val.max()}')
 
         while True:
             sel = leaves[val < thred]
-            nids = mcot.select_front(sel)
-            if nids.size(0) == 0:
+            nids, counts = torch.unique(sel[:, 0], return_counts=True)
+            # discover the fronts whose all children are included in sel
+            sel_nids = nids[counts>=int(mcot.tree.N**3*args.thresh_tol)]
+            if sel_nids.size(0) == 0:
                 print(f'Prune 0/{leaves.size(0)}')
                 break
             # print(nids.shape)
             # print(f'nid:{nids.shape}')
-            _ = nids.size(0)*8
-            print(f'Prune {_}/{leaves.size(0)}')
-            mcot.merge(nids)
+            mcot.merge(sel_nids)
 
-            reduced_sel = [l in nids for l in leaves[:, 0]]
-            nids, idxs, counts = torch.unique(torch.tensor(
-                reduced_sel, device=device), return_inverse=True, return_counts=True)
-            reduced = torch.zeros(nids.size(
-                0), dtype=val.dtype, device=device).scatter_add_(0, idxs, val)
-            reduced /= counts
-            parent_sel = mcot.tree._unpack_index(
-                mcot.tree.parent_depth[nids, 0])
+            print(f'Prune {len(sel_nids)*mcot.tree.N ** 3}/{leaves.size(0)}')
+    
+            reduced = instant_weights[sel_nids].view(-1, mcot.tree.N ** 3).sum(-1)
+            parent_sel = (*mcot.tree._unpack_index(
+                mcot.tree.parent_depth[sel_nids, 0]).long().T,)
+            # nids, idxs, counts = torch.unique(torch.tensor(
+            #     leaves[:,0], device=device), return_inverse=True, return_counts=True)
+            
+            # reduced = torch.zeros(sel_nids.size(
+            #     0), dtype=val.dtype, device=device).scatter_add_(0, idxs, val)
+            # reduced /= counts
+            # print(mcot.tree.parent_depth.shape)
+            # print(nids.shape)
 
             # print(leaves.shape)
             # print(val.shape)
@@ -475,21 +486,22 @@ def train_step():
             # print((val[val >= thred].shape))
             # print(reduced.shape)
 
-            leaves = torch.cat((leaves[val >= thred].to(device), parent_sel))
-            instant_weights = torch.cat((val[val >= thred], reduced))
+            leaves = mcot.tree._all_leaves()
+            instant_weights[parent_sel] = reduced
 
             # print(leaves.shape)
             # print(instant_weights.shape)
             # assert 0
             if args.thresh_type == 'weight':
-                val = instant_weights
+                val = instant_weights[(*leaves.long().T, )]
             elif args.thresh_type == 'sigma':
                 val = mcot.tree.data[(*leaves.long().T, )][..., -1]
                 if args.density_softplus:
                     val = _SOFTPLUS_M1(val)
 
             val = torch.nan_to_num(val, nan=0)
-
+    else:
+        val = instant_weights[(*leaves.long().T, )]
     if args.policy == 'hybrid' and args.record_tree and epoch_id == args.hybrid_to_pareto:
         print('Change the policy on selection...')
         mcot.policy = 'pareto'
@@ -497,10 +509,10 @@ def train_step():
     if not prune:
         print('Start sampling...')
         sample_k = int(max(1, player.n_leaves*sampling_rate))
-        idxs = mcot.select(sample_k, instant_weights, leaves)
+        idxs = mcot.select(sample_k, val, leaves)
         # print(f'{idxs.size(0)}/{sample_k}')
         if args.record_tree:
-            mcot.backtrace(instant_weights, leaves)
+            mcot.backtrace(val, leaves)
         mcot.expand(idxs)
 
     summary_writer.add_scalar(f'train/num_nodes', player.n_leaves, gstep_id)
@@ -515,8 +527,7 @@ def train_step():
         summary_writer.add_histogram(f'train/sigma_iter_{gstep_id}', sigma, 0)
 
     if args.log_weight:
-        _ = torch.nan_to_num(instant_weights, nan=0)
-        summary_writer.add_histogram(f'train/weight_iter_{gstep_id}', _, 0)
+        summary_writer.add_histogram(f'train/weight_iter_{gstep_id}', val, 0)
 
 
 with tqdm(total=args.depth_limit) as pbar:

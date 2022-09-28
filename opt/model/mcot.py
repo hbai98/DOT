@@ -311,14 +311,6 @@ class MCOT(nn.Module):
         idxs = [f in nids for f in self.tree._frontier]
         self.tree.merge(idxs)
 
-    def select_front(self, sel):
-        # sel is indexes of leaves
-        # discover the fronts whose all children are included in sel
-        N = self.tree.N
-        nids, chunks = torch.unique(sel[:, 0], return_counts=True)
-        nids = nids[chunks == N**3]
-        return nids
-
     def select(self, max_sel, reward, rw_idxs):
         """Deep first search based on policy value: from root to the tail.
         Select the top k nodes.
@@ -450,9 +442,6 @@ class MCOT(nn.Module):
                 idxs_ = self.tree._unpack_index(
                     self.tree.parent_depth[nid.long(), 0])
 
-    def _reward(self, rewards):
-        res = rewards/rewards.sum()
-        return res
 
     def _volumeRenderer(self):
         return VolumeRenderer(self.tree, step_size=self.step_size,
