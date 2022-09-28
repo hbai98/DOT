@@ -22,7 +22,9 @@ from datetime import datetime
 from torch.utils.tensorboard import SummaryWriter
 
 from tqdm import tqdm
-
+import os
+torch.cuda.set_device(6) 
+os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 parser = argparse.ArgumentParser()
@@ -479,7 +481,8 @@ def train_step():
             # print(mask)
 
             sel_nids = nids[mask]
-
+            parent_sel = (*mcot.tree._unpack_index(
+                mcot.tree.parent_depth[sel_nids, 0]).long().T,)
             print(f'sel_nids:{sel_nids.shape}')
 
             if pre_sel is not None:
@@ -489,6 +492,7 @@ def train_step():
             pre_sel = sel_nids
             # print(nids.shape)
             mcot.merge(sel_nids)
+            mcot.tree.check_integrity()
 
             if not args.recursive_thred:
                 break
@@ -496,8 +500,7 @@ def train_step():
             print(f'Prune {len(sel_nids)*mcot.tree.N ** 3}/{leaves.size(0)}')
 
             reduced = instant_weights[sel_nids].view(-1, mcot.tree.N ** 3).sum(-1)
-            parent_sel = (*mcot.tree._unpack_index(
-                mcot.tree.parent_depth[sel_nids, 0]).long().T,)
+
 
             # nids, idxs, counts = torch.unique(torch.tensor(
             #     leaves[:,0], device=device), return_inverse=True, return_counts=True)

@@ -25,6 +25,7 @@
     "thresh_method":"li",
     "thresh_epochs":2,
     "thresh_tol":0.8,
+    "recursive_thred":false,
 
     "density_softplus":true,
 
