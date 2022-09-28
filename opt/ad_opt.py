@@ -23,7 +23,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from tqdm import tqdm
 import os
-torch.cuda.set_device(6) 
+# torch.cuda.set_device(6) 
 os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -355,7 +355,7 @@ def train_step():
     pre_mse = 0
     counter = 0
     sampling_rate = sampling_rate_func(gstep_id) * sampling_factor
-    leaves = mcot.tree._all_leaves()
+    
     
     # stimulate
     while True:
@@ -450,6 +450,8 @@ def train_step():
    # the flag used to skip selection and expansion; to give more time to
     # obtain stable properties.
     prune = False
+    
+    leaves = mcot.tree._all_leaves()
     sel = (*leaves.long().T, )
     
     if args.thresh_type == 'sigma':
@@ -462,7 +464,7 @@ def train_step():
         val = instant_weights[sel]
     
     val = torch.nan_to_num(val, nan=0)
-        
+    
     if args.use_threshold and epoch_id % args.thresh_epochs == 0:
         prune = True
         thred = threshold(val, args.thresh_method)
