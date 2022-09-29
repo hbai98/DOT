@@ -10,8 +10,8 @@
     "lr_sh_delay_steps": 0,
     "lr_sh_delay_mult": 0.01,
 
-    "rms_beta":0.9,
-    
+    "rms_beta":0.95,
+
     "hessian_mse":5e-4,
     "hessian_mse_final":5e-5,
     "hessian_mse_delay_steps": 0,
@@ -24,7 +24,7 @@
     "stop_thresh":0,
     "use_threshold":true,
     "thresh_type":"weight",
-    "thresh_method":"constant",
+    "thresh_method":"li",
     "thresh_val":0.256,
     "thresh_epochs":3,
     "thresh_tol":0.8,

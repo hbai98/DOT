@@ -359,8 +359,7 @@ def train_step():
     pre_mse = 0
     counter = 0
     sampling_rate = sampling_rate_func(gstep_id) * sampling_factor
-    _, H, W, _= dset.rays.gt.shape
-    batch_size = H*W*args.batch_size
+    batch_size = 640000*args.batch_size # 800*800 -> shapes
     num_rays = dset.rays.origins.size(0)
     rays_per_batch = (num_rays-1)//args.batch_size+1
     
