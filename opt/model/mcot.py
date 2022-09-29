@@ -195,48 +195,6 @@ class SMCT(N3Tree):
         self._invalidate()
         return resized
 
-    # 'Frontier' operations (node merging/pruning)
-    def merge(self, frontier_sel=None, op=torch.mean):
-        """
-        Merge leaves into selected 'frontier' nodes
-        (i.e., nodes for which all children are leaves).
-        Use :code:`shrink_to_fit()` to recover memory freed.
-
-        :param frontier_sel: selector (int, mask, list of indices etc)
-                             for frontier nodes. In same order as :code:`reduce_frontier()`.
-                             Default all nodes.
-                             *Typical use*: use :code:`reduce_frontier(...)` to determine
-                             conditions for merge, then pass
-                             bool mask (of length :code:`n_frontier`) or indices to :code:`merge()`.
-        :param op: reduction to combine child leaves into node.
-                   E.g. torch.max, torch.mean.
-                   Should take a positional argument :code:`x` :code:`(B, N, data_dim)` and
-                   a named parameter :code:`dim` (always 1),
-                   and return a matrix of :code:`(B, data_dim)`.
-                   If a tuple is returned, uses first result.
-
-        """
-        if self.n_internal - self._n_free.item() <= 1:
-            raise RuntimeError("Cannot merge root node")
-        nid = self._frontier if frontier_sel is None else self._frontier[frontier_sel]
-        if nid.numel() == 0:
-            return False
-        if nid.ndim == 0:
-            nid = nid.reshape(1)
-        data = self.data.data[nid]
-        reduced_vals = op(data.view(-1, self.N ** 3, self.data_dim), dim=1)
-        if isinstance(reduced_vals, tuple):
-            # Allow torch.max, torch.min, etc
-            reduced_vals = reduced_vals[0]
-        parent_sel = (*self._unpack_index(self.parent_depth[nid, 0]).long().T,)
-        self.data.data[parent_sel] = reduced_vals
-        self.child[parent_sel] = 0
-        self.parent_depth[nid] = -1
-        self.child[nid] = -1
-        self._n_free += nid.shape[0]
-        self._invalidate()
-        return True
-
 
 class MCOT(nn.Module):
     def __init__(self,

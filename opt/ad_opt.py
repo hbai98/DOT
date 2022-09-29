@@ -39,7 +39,7 @@ group.add_argument('--sh_dim', type=int, default=9,
 #                    help='Number of background layers (0=disable BG model)')
 # group.add_argument('--background_reso', type=int, default=512, help='Background resolution')
 roup = parser.add_argument_group("optimization")
-group.add_argument('--batch_size', type=int, default=640000,
+group.add_argument('--batch_size', type=int, default=5,
                    # 100000,
                    #  2000,
                    help='batch size')
@@ -161,9 +161,13 @@ group.add_argument('--thresh_epochs',
                    default=2,
                    help='threshold after every epoches')
 group.add_argument('--thresh_method',
-                   choices=['li', 'otsu', 'local'],
+                   choices=['li', 'otsu', 'local', 'constant'],
                    default='li',
                    help='dynamic threshold algorithms')
+group.add_argument('--thresh_val',
+                   type=float,
+                   default=0.256,
+                   help='constant threshold value')
 group.add_argument('--thresh_tol',
                    type=float,
                    default=0.7,
@@ -355,32 +359,41 @@ def train_step():
     pre_mse = 0
     counter = 0
     sampling_rate = sampling_rate_func(gstep_id) * sampling_factor
-    
+    _, H, W, _= dset.rays.gt.shape
+    batch_size = H*W*args.batch_size
+    num_rays = dset.rays.origins.size(0)
+    rays_per_batch = (num_rays-1)//args.batch_size+1
     
     # stimulate
     while True:
         # important to make the learned properties stable.
-        dset.shuffle_rays()
+        # dset.shuffle_rays()
+        indexer = torch.randperm(dset.rays.origins.size(0))
+        norms = np.linalg.norm(dset.rays.dirs, axis=-1, keepdims=True)
+        viewdirs = dset.rays.dirs / norms
+        rays = svox.Rays(dset.rays.origins[indexer],
+                    dset.rays.dirs[indexer], viewdirs[indexer])
+        gt = dset.rays.gt[indexer]        
         # updata params
         instant_weights = torch.zeros_like(player.child, device=device, dtype=player.data.dtype)
         weights = []
 
-        for iter_id, batch_begin in enumerate(range(0, num_rays, args.batch_size)):
+        for iter_id, batch_begin in enumerate(range(0, num_rays, batch_size)):
             gstep_id = iter_id + gstep_id_base
-            batch_end = min(batch_begin + args.batch_size, num_rays)
-            batch_origins = dset.rays.origins[batch_begin: batch_end].to(
+            batch_end = min(batch_begin + batch_size, num_rays)
+            batch_origins = rays.origins[batch_begin: batch_end].to(
                 device)
-            batch_dirs = dset.rays.dirs[batch_begin: batch_end].to(device)
-            batch_viewdir = viewdirs[batch_begin: batch_end].to(device)
-            rgb_gt = dset.rays.gt[batch_begin: batch_end]
-            rays = svox.Rays(batch_origins, batch_dirs, batch_viewdir)
+            batch_dirs = rays.dirs[batch_begin: batch_end].to(device)
+            batch_viewdir = rays.viewdirs[batch_begin: batch_end].to(device)
+            rgb_gt = gt[batch_begin: batch_end].to(device)
+            b_rays = svox.Rays(batch_origins, batch_dirs, batch_viewdir)
 
             lr_sigma = lr_sigma_func(gstep_id) * lr_sigma_factor
             lr_sh = lr_sh_func(gstep_id) * lr_sh_factor
             hessian_mse = hessian_func(gstep_id) * hessian_factor
 
             with player.accumulate_weights(op="sum") as accum:
-                rgb_pred = render.forward(rays, cuda=device == 'cuda')
+                rgb_pred = render.forward(b_rays, cuda=device == 'cuda')
 
             mse = F.mse_loss(rgb_gt, rgb_pred)
             mcot.tree.zero_grad()
@@ -398,7 +411,7 @@ def train_step():
             # sel = [*mcot.tree._all_leaves().long().T, ]
             # weight = weight[sel]
             # mse reduction
-            instant_weights += weight
+            instant_weights += weight/weight.sum()
 
             if args.use_variance:
                 # weight varibility
@@ -428,7 +441,6 @@ def train_step():
         if _hessian_mse < hessian_mse:
             counter += 1
             if counter > args.hessian_tolerance:
-                instant_weights /= instant_weights.sum()
                 # calculate val_weights
                 if args.use_variance:
                     var_weights = torch.var(torch.stack(weights, dim=0), dim=0)
@@ -467,7 +479,10 @@ def train_step():
     
     if args.use_threshold and epoch_id % args.thresh_epochs == 0:
         prune = True
-        thred = threshold(val, args.thresh_method)
+        if args.thresh_method == 'constant':
+            thred = args.thresh_val
+        else:
+            thred = threshold(val, args.thresh_method)
 
         print(f'Prunning at {thred}/{val.max()}')
         pre_sel = None
@@ -483,9 +498,9 @@ def train_step():
             # print(mask)
 
             sel_nids = nids[mask]
+            print(f'sel_nids:{sel_nids.shape}')
             parent_sel = (*mcot.tree._unpack_index(
                 mcot.tree.parent_depth[sel_nids, 0]).long().T,)
-            print(f'sel_nids:{sel_nids.shape}')
 
             if pre_sel is not None:
                 if torch.equal(pre_sel, sel_nids) or sel_nids.size(0) == 0:
@@ -565,11 +580,9 @@ with tqdm(total=args.depth_limit) as pbar:
     player = mcot.tree
     depth = player.get_depth()
     pbar.update(depth.item())
-
+    
     while True:
         epoch_id += 1
-        num_rays = dset.rays.origins.size(0)
-        rays_per_batch = (num_rays-1)//args.batch_size+1
         player = mcot.tree
         render = mcot._volumeRenderer()
         depth = player.get_depth()
