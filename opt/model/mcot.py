@@ -7,7 +7,7 @@ from svox.helpers import DataFormat
 from warnings import warn
 from svox.svox import _get_c_extension
 import numpy as np
-from .utils import pareto_2d
+from .utils import pareto_2d, _SOFTPLUS_M1
 from einops import rearrange
 _C = _get_c_extension()
 
@@ -213,6 +213,8 @@ class MCOT(nn.Module):
                  p_sel=['ctb'],
                  density_softplus=True,
                  record=True,
+                 use_sparse=True,
+                 init_weight_sparsity_loss=0.01,
                  ):
         """Main mcts based octree data structure
 
@@ -257,6 +259,8 @@ class MCOT(nn.Module):
         self.density_softplus = density_softplus
         self.record = record
 
+        if use_sparse:
+            self.w_sparsity = torch.nn.Parameter(torch.tensor([init_weight_sparsity_loss], device=device))
         if record:
             self.register_buffer("num_visits", torch.zeros(
                 n_nodes, N, N, N, dtype=torch.int32, device=device))
@@ -488,7 +492,12 @@ class MCOT(nn.Module):
             raise NotImplementedError(f'Unsupported optimizer {optim}')
         data.grad.zero_()
 
-
+    def _sigma(self):
+        val = self.tree[:]
+        val = val[...,-1]
+        if self.density_softplus:
+            val = _SOFTPLUS_M1(val)
+        return val
 def get_expon_func(
         lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000):
     """
