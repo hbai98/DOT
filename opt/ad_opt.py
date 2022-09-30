@@ -294,6 +294,8 @@ gstep_id_base = 0
 gstep_id = 0
 delta_depth = 0
 
+max_psnr = 0
+
 cam_trans = torch.diag(torch.tensor(
     [1, -1, -1, 1], dtype=torch.float32, device=device)).inverse()
 
@@ -301,7 +303,7 @@ if args.use_sparsity_loss:
     optim = torch.optim.Adam([mcot.w_sparsity], lr=args.lr_sparsity_loss)
 
 def eval_step():
-    global gstep_id, gstep_id_base
+    global gstep_id, gstep_id_base, max_psnr
 
     # Put in a function to avoid memory leak
     print('Eval step')
@@ -361,6 +363,11 @@ def eval_step():
                                       stats_test[stat_name], global_step=gstep_id_base)
         summary_writer.add_scalar('epoch_id', float(
             epoch_id), global_step=gstep_id_base)
+        if stats_test['psnr'] > max_psnr:
+            max_psnr = stats_test['psnr']
+            ckpt_path = path.join(args.train_dir, f'ckpt_best.npz')
+            print('Saving best:', ckpt_path)
+            player.save(ckpt_path)            
         print('eval stats:', stats_test)
 
 
@@ -413,7 +420,7 @@ def train_step():
             
             if args.use_sparsity_loss:
                 sigma = mcot._sigma()
-                loss_sparsity = mcot.w_sparsity * torch.abs(1-torch.exp(-sigma)).mean()
+                loss_sparsity = torch.abs(mcot.w_sparsity) * torch.abs(1-torch.exp(-sigma)).mean()
                 mse = mse.unsqueeze(0)
                 mse += loss_sparsity
                 

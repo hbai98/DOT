@@ -29,7 +29,7 @@
     "stop_thresh":0,
     "use_threshold":true,
     "thresh_type":"sigma",
-    "thresh_method":"constant",
+    "thresh_method":"yen",
     "thresh_val":5,
     "thresh_epochs":2,
     "thresh_tol":1,
