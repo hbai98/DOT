@@ -1,7 +1,7 @@
 {
     "eval": true,
-    "data_root": "/home/sxyu/data/nerf_synthetic",
-    "train_root": "/home/sxyu/proj/svox2/opt/ckpt_auto/256_to_512_fasttv",
+    "data_root": "../data/nerf_synthetic",
+    "train_root": "../checkpoints/synthetic",
     "variables": {
         "scene": ["lego", "mic", "ship", "chair", "ficus", "materials", "drums", "hotdog"]
     },

@@ -1,9 +1,7 @@
-# Copyright 2021 Alex Yu
+# Copyright 2022 Haotian Bai
 # Eval
-
+import svox
 import torch
-import svox2
-import svox2.utils
 import math
 import argparse
 import numpy as np
@@ -21,8 +19,10 @@ parser.add_argument('ckpt', type=str)
 
 config_util.define_common_args(parser)
 
-parser.add_argument('--n_eval', '-n', type=int, default=100000, help='images to evaluate (equal interval), at most evals every image')
-parser.add_argument('--train', action='store_true', default=False, help='render train set')
+parser.add_argument('--n_eval', '-n', type=int, default=100000,
+                    help='images to evaluate (equal interval), at most evals every image')
+parser.add_argument('--train', action='store_true',
+                    default=False, help='render train set')
 parser.add_argument('--render_path',
                     action='store_true',
                     default=False,
@@ -91,7 +91,7 @@ if not path.isfile(args.ckpt):
     args.ckpt = path.join(args.ckpt, 'ckpt.npz')
 
 render_dir = path.join(path.dirname(args.ckpt),
-            'train_renders' if args.train else 'test_renders')
+                       'train_renders' if args.train else 'test_renders')
 want_metrics = True
 if args.render_path:
     assert not args.train
@@ -109,17 +109,19 @@ if args.ray_len:
     want_metrics = False
 
 dset = datasets[args.dataset_type](args.data_dir, split="test_train" if args.train else "test",
-                                    **config_util.build_data_options(args))
+                                   **config_util.build_data_options(args))
 
-grid = svox2.SparseGrid.load(args.ckpt, device=device)
+tree = svox.N3Tree.load(args.ckpt, device=device)
+render = svox.VolumeRenderer(
+    tree, step_size=1e-5, density_softplus=True, ndc=dset.ndc_coeffs)
 
-if grid.use_background:
+if tree.use_background:
     if args.nobg:
         #  grid.background_cubemap.data = grid.background_cubemap.data.cuda()
-        grid.background_data.data[..., -1] = 0.0
+        tree.background_data.data[..., -1] = 0.0
         render_dir += '_nobg'
     if args.nofg:
-        grid.density_data.data[:] = 0.0
+        tree.density_data.data[:] = 0.0
         #  grid.sh_data.data[..., 0] = 1.0 / svox2.utils.SH_C0
         #  grid.sh_data.data[..., 9] = 1.0 / svox2.utils.SH_C0
         #  grid.sh_data.data[..., 18] = 1.0 / svox2.utils.SH_C0
@@ -129,15 +131,18 @@ if grid.use_background:
     #  grid.links.data[grid.links.size(0)//2:] = -1
     #  render_dir += "_chopx2"
 
-config_util.setup_render_opts(grid.opt, args)
+config_util.setup_render_opts(tree.opt, args)
 
 if args.blackbg:
     print('Forcing black bg')
     render_dir += '_blackbg'
-    grid.opt.background_brightness = 0.0
+    tree.opt.background_brightness = 0.0
 
 print('Writing to', render_dir)
 os.makedirs(render_dir, exist_ok=True)
+
+cam_trans = torch.diag(torch.tensor(
+    [1, -1, -1, 1], dtype=torch.float32, device=device)).inverse()
 
 if not args.no_imsave:
     print('Will write out all frames as PNG (this take most of the time)')
@@ -151,7 +156,8 @@ with torch.no_grad():
     avg_ssim = 0.0
     avg_lpips = 0.0
     n_images_gen = 0
-    c2ws = dset.render_c2w.to(device=device) if args.render_path else dset.c2w.to(device=device)
+    c2ws = dset.render_c2w.to(
+        device=device) if args.render_path else dset.c2w.to(device=device)
     # DEBUGGING
     #  rad = [1.496031746031746, 1.6613756613756614, 1.0]
     #  half_sz = [grid.links.size(0) // 2, grid.links.size(1) // 2]
@@ -177,14 +183,14 @@ with torch.no_grad():
         w = dset_w if args.crop == 1.0 else int(dset_w * args.crop)
         h = dset_h if args.crop == 1.0 else int(dset_h * args.crop)
 
-        cam = svox2.Camera(c2ws[img_id],
-                           dset.intrins.get('fx', img_id),
-                           dset.intrins.get('fy', img_id),
-                           dset.intrins.get('cx', img_id) + (w - dset_w) * 0.5,
-                           dset.intrins.get('cy', img_id) + (h - dset_h) * 0.5,
-                           w, h,
-                           ndc_coeffs=dset.ndc_coeffs)
-        im = grid.volume_render_image(cam, use_kernel=True, return_raylen=args.ray_len)
+        # OpenCV to original
+        c2w = dset.c2w[img_id].to(device=device)@cam_trans
+        im = render.render_persp(c2w=c2w,
+                                 width=w,
+                                 height=h,
+                                 fx=dset.intrins.get(
+                                     'fx', img_id),
+                                 fy=dset.intrins.get('fy', img_id),).clamp_(0.0, 1.0)
         if args.ray_len:
             minv, meanv, maxv = im.min().item(), im.mean().item(), im.max().item()
             im = viridis_cmap(im.cpu().numpy())
@@ -196,7 +202,7 @@ with torch.no_grad():
         if not args.render_path:
             im_gt = dset.gt[img_id].to(device=device)
             mse = (im - im_gt) ** 2
-            mse_num : float = mse.mean().item()
+            mse_num: float = mse.mean().item()
             psnr = -10.0 * math.log10(mse_num)
             avg_psnr += psnr
             if not args.timing:
@@ -204,12 +210,12 @@ with torch.no_grad():
                 avg_ssim += ssim
                 if not args.no_lpips:
                     lpips_i = lpips_vgg(im_gt.permute([2, 0, 1]).contiguous(),
-                            im.permute([2, 0, 1]).contiguous(), normalize=True).item()
+                                        im.permute([2, 0, 1]).contiguous(), normalize=True).item()
                     avg_lpips += lpips_i
                     print(img_id, 'PSNR', psnr, 'SSIM', ssim, 'LPIPS', lpips_i)
                 else:
                     print(img_id, 'PSNR', psnr, 'SSIM', ssim)
-        img_path = path.join(render_dir, f'{img_id:04d}.png');
+        img_path = path.join(render_dir, f'{img_id:04d}.png')
         im = im.cpu().numpy()
         if not args.render_path:
             im_gt = dset.gt[img_id].numpy()
@@ -217,7 +223,7 @@ with torch.no_grad():
         if not args.timing:
             im = (im * 255).astype(np.uint8)
             if not args.no_imsave:
-                imageio.imwrite(img_path,im)
+                imageio.imwrite(img_path, im)
             if not args.no_vid:
                 frames.append(im)
         im = None
@@ -241,6 +247,5 @@ with torch.no_grad():
                     f.write(str(avg_lpips))
     if not args.no_vid and len(frames):
         vid_path = render_dir + '.mp4'
-        imageio.mimwrite(vid_path, frames, fps=args.fps, macro_block_size=8)  # pip install imageio-ffmpeg
-
-
+        imageio.mimwrite(vid_path, frames, fps=args.fps,
+                         macro_block_size=8)  # pip install imageio-ffmpeg

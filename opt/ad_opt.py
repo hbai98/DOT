@@ -24,7 +24,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import os
 # torch.cuda.set_device(6) 
-os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
+# os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 parser = argparse.ArgumentParser()
@@ -321,7 +321,8 @@ def eval_step():
 
         for i, img_id in enumerate(img_ids):
             # OpenCV to original
-            c2w = dset_test.c2w[img_id].to(device=device)@cam_trans
+            c2w = dset_test.c2w[img_id].to(device=device)
+            c2w = torch.mm(c2w, cam_trans)
             rgb_pred_test = render.render_persp(c2w=c2w,
                                                 width=dset_test.get_image_size(img_id)[
                                                     1],
@@ -369,7 +370,6 @@ def eval_step():
             print('Saving best:', ckpt_path)
             player.save(ckpt_path)            
         print('eval stats:', stats_test)
-
 
 def train_step():
     global gstep_id, gstep_id_base, delta_depth, thred
@@ -435,6 +435,8 @@ def train_step():
 
             mse_num: float = mse.detach().item()
             psnr = -10.0 * math.log10(mse_num)
+            if math.isnan(psnr):
+                assert False, 'NAN PSNR'
             stats['mse'] += mse_num
             stats['psnr'] += psnr
             stats['invsqr_mse'] += 1.0 / mse_num ** 2
@@ -508,7 +510,7 @@ def train_step():
         assert args.record_tree, 'Pruning by num_visits is only accessible when record_tree option is true.'
     elif args.thresh_type == 'weight':
         val = instant_weights[sel]
-    print(val.shape)
+        
     val = torch.nan_to_num(val, nan=0)
     
     if args.use_threshold and epoch_id % args.thresh_epochs == 0:
@@ -597,9 +599,12 @@ with tqdm(total=args.depth_limit) as pbar:
     while True:
         epoch_id += 1
         player = mcot.tree
+        # render = mcot._volumeRenderer(dset.ndc_coeffs)
         render = mcot._volumeRenderer()
+        
         depth = player.get_depth()
 
+        # eval_step()
         train_step()
         delta_depth = (player.get_depth()-depth).item()
 

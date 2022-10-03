@@ -32,7 +32,7 @@ args = parser.parse_args()
 PSNR_FILE_NAME = 'test_psnr.txt'
 
 def run_exp(env, eval_mode:bool, enable_render:bool, train_dir, data_dir, config, flags, eval_flags, common_flags):
-    opt_base_cmd = [ "python", "opt.py", "--tune_mode" ]
+    opt_base_cmd = [ "python", "ad_opt.py", "--tune_mode" ]
 
     if not eval_mode:
         opt_base_cmd += ["--tune_nosave"]
@@ -56,7 +56,7 @@ def run_exp(env, eval_mode:bool, enable_render:bool, train_dir, data_dir, config
         print('! SKIP training because ckpt exists', ckpt_path)
         opt_ret = ""  # Silence
     else:
-        print('! RUN opt.py -t', train_dir)
+        print('! RUN ad_opt.py -t', train_dir)
         opt_cmd = ' '.join(opt_base_cmd + flags + common_flags)
         print(opt_cmd)
         try:
