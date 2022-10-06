@@ -24,7 +24,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import os
 # torch.cuda.set_device(6) 
-os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
+# os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 parser = argparse.ArgumentParser()
@@ -73,6 +73,8 @@ group.add_argument('--sampling_rate_delay_steps', type=int, default=0,
                    help="Reverse cosine steps (0 means disable)")
 group.add_argument('--sampling_rate_delay_mult',
                    type=float, default=1e-2)  # 1e-4)#1e-4)
+
+group.add_argument('--prune_max', type=float, default=6)
 
 
 group.add_argument(
@@ -152,6 +154,12 @@ group.add_argument('--hybrid_to_pareto',
                    help='after how many epochs the policy is changed to make step-wise decisions.')
 group.add_argument('--pareto_signals_num', type=int,
                    default=1)
+group.add_argument('--use_threshold', type=bool,
+                   default=True,
+                   )
+group.add_argument('--recursive_thred', type=bool,
+                    default=True,
+                    )
 group.add_argument('--use_variance', type=bool,
                    default=False)
 group.add_argument('--thresh_type',
@@ -178,10 +186,6 @@ group.add_argument('--thresh_tol',
                    type=float,
                    default=0.7,
                    help='tolerance of threshold')
-group.add_argument('--prune_tol_ratio',
-                   type=float,
-                   default=0.25,
-                   help='tolerance of prunning')
 group.add_argument('--record_tree',
                    type=bool,
                    default=True,
@@ -265,7 +269,7 @@ mcot = MCOT(center=dset.scene_center,
             data_format='SH'+str(args.sh_dim),
             policy=policy,
             device=device,
-            p_sel=pareto_signals[:1],
+            p_sel=pareto_signals[:args.pareto_signals_num],
             density_softplus=args.density_softplus,
             record=args.record_tree,
             use_sparse=args.use_sparsity_loss,
@@ -280,6 +284,7 @@ hessian_func = get_expon_lr_func(args.hessian_mse, args.hessian_mse_final, args.
                                  args.hessian_mse_delay_mult, args.hessian_mse_decay_steps)
 sampling_rate_func = get_expon_lr_func(args.sampling_rate, args.sampling_rate_final, args.sampling_rate_delay_steps,
                                        args.sampling_rate_delay_mult, args.sampling_rate_decay_steps)
+
 global delta_depth
 
 lr_sigma_factor = 1.0
@@ -294,7 +299,6 @@ gstep_id = 0
 delta_depth = 0
 
 max_psnr = 0
-tol_delta_val = None
 
 cam_trans = torch.diag(torch.tensor(
     [1, -1, -1, 1], dtype=torch.float32, device=device)).inverse()
@@ -371,70 +375,6 @@ def eval_step():
             player.save(ckpt_path)            
         print('eval stats:', stats_test)
 
-def update_val_leaves(instant_weights):
-    leaves = mcot.tree._all_leaves()
-    if args.thresh_type == 'weight':
-        val = instant_weights[(*leaves.long().T, )]
-    elif args.thresh_type == 'sigma':
-        val_ = mcot.tree.data[(*leaves.long().T, )][..., -1]
-        if args.density_softplus:
-            val = _SOFTPLUS_M1(val_)
-    val = torch.nan_to_num(val, nan=0)
-    return val, leaves
-
-def prune_func(instant_weights):
-    leaves = mcot.tree._all_leaves()
-    sel = (*leaves.long().T, )
-    
-    if args.thresh_type == 'sigma':
-        val = mcot.tree.data[sel][..., -1]
-        if args.density_softplus:
-            val = _SOFTPLUS_M1(val)
-    elif args.thresh_type == 'num_visits':
-        assert args.record_tree, 'Pruning by num_visits is only accessible when record_tree option is true.'
-    elif args.thresh_type == 'weight':
-        val = instant_weights[sel]
-    val = torch.nan_to_num(val, nan=0)
-    
-    if args.thresh_method == 'constant':
-        thred = args.thresh_val
-    else:
-        thred = threshold(val, args.thresh_method, args.thresh_gaussian_sigma)
-        # thred = min(thred, args.prune_max)
-    summary_writer.add_scalar(f'train/thred', thred, gstep_id)
-
-    if thred >= val.max()*args.prune_tol_ratio:
-        return None, None
-    
-    pre_sel = None
-
-    while True:
-        sel = leaves[val < thred]
-        nids, counts = torch.unique(sel[:, 0], return_counts=True)
-        # discover the fronts whose all children are included in sel
-        mask = (counts>=int(mcot.tree.N**3*args.thresh_tol)).numpy()
-
-        sel_nids = nids[mask]
-        parent_sel = (*mcot.tree._unpack_index(
-            mcot.tree.parent_depth[sel_nids, 0]).long().T,)
-
-        if pre_sel is not None:
-            if sel_nids.size(0) == 0 or torch.equal(pre_sel, sel_nids):
-                break
-
-        pre_sel = sel_nids
-        mcot.merge(sel_nids)
-        print(f'Prunning at {thred}/{val.max()}')
-        print(f'Prune {len(sel_nids)*mcot.tree.N ** 3}/{leaves.size(0)}')
-
-        reduced = instant_weights[sel_nids].view(-1, mcot.tree.N ** 3).sum(-1)
-        instant_weights[parent_sel] = reduced
-
-        val, leaves = update_val_leaves(instant_weights)
-    
-    return val, leaves
-
-
 def train_step():
     global gstep_id, gstep_id_base, delta_depth, thred
 
@@ -443,11 +383,11 @@ def train_step():
     pre_delta_mse = 0
     pre_mse = 0
     counter = 0
+    sampling_rate = sampling_rate_func(gstep_id) * sampling_factor
     batch_size =dset.h*dset.w*args.batch_size 
     num_rays = dset.rays.origins.size(0)
     rays_per_batch = (num_rays-1)//batch_size+1
-    leaves = mcot.tree._all_leaves()
-    sel = (*leaves.long().T, )
+    
     
     # stimulate
     while True:
@@ -462,6 +402,7 @@ def train_step():
         # updata params
         instant_weights = torch.zeros_like(player.child, device=device, dtype=player.data.dtype)
         weights = []
+
         for iter_id, batch_begin in enumerate(range(0, num_rays, batch_size)):
             gstep_id = iter_id + gstep_id_base
             batch_end = min(batch_begin + batch_size, num_rays)
@@ -475,7 +416,6 @@ def train_step():
             lr_sigma = lr_sigma_func(gstep_id) * lr_sigma_factor
             lr_sh = lr_sh_func(gstep_id) * lr_sh_factor
             hessian_mse = hessian_func(gstep_id) * hessian_factor
-            sampling_rate = sampling_rate_func(gstep_id) * sampling_factor
 
             with player.accumulate_weights(op="sum") as accum:
                 rgb_pred = render.forward(b_rays, cuda=device == 'cuda')
@@ -496,7 +436,12 @@ def train_step():
             if args.use_sparsity_loss:
                 optim.step()
                 optim.zero_grad()
-
+                
+            if args.log_sigma:
+                sigma = mcot._sigma()
+                print(sigma.max())
+                sigma = torch.nan_to_num(sigma, nan=0)
+                summary_writer.add_histogram(f'train/sigma', sigma, gstep_id)
                     
             mse_num: float = mse.detach().item()
             psnr = -10.0 * math.log10(mse_num)
@@ -515,25 +460,12 @@ def train_step():
             if args.use_variance:
                 # weight varibility
                 weights.append(weight)
-
-        val, leaves = prune_func(instant_weights)
-        if val is not None:
-            sel = leaves
                 
-        sigma = mcot._sigma()
-        if sigma.max().isinf():
-            assert False, 'Inf density.'
-        sigma = torch.nan_to_num(sigma, nan=0)
-        summary_writer.add_histogram(f'train/sigma', sigma, gstep_id)
-            
-        pre_instantweight = instant_weights[sel]    
         # log
         if args.use_sparsity_loss:
             summary_writer.add_scalar(
                 "train/w_sparsity", mcot.w_sparsity, global_step=gstep_id
             )
-        summary_writer.add_scalar(f'train/num_nodes', player.n_leaves, gstep_id)
-        summary_writer.add_scalar(f'train/depth', player.get_depth(), gstep_id)
         summary_writer.add_scalar(
             "train/lr_sh", lr_sh, global_step=gstep_id)
         summary_writer.add_scalar(
@@ -553,15 +485,15 @@ def train_step():
             stat_val = stats[stat_name] / rays_per_batch
             summary_writer.add_scalar(f'train/{stat_name}', stat_val, gstep_id)
             stats[stat_name] = 0
-        
+
         if _hessian_mse < hessian_mse:
             counter += 1
             if counter > args.hessian_tolerance:
                 # calculate val_weights
                 if args.use_variance:
-                    var = torch.var(torch.stack(weights, dim=0), dim=0)
+                    var_weights = torch.var(torch.stack(weights, dim=0), dim=0)
                     instant_weights = torch.stack(
-                        [instant_weights, var], dim=-1)
+                        [instant_weights, var_weights], dim=-1)
                     instant_weights = instant_weights.mean(-1)
                 break
 
@@ -577,24 +509,91 @@ def train_step():
         pbar.update(delta_depth)
     # threshold
     # the flag used to skip selection and expansion; to give more time to
-    # obtain stable properties
+    # obtain stable properties.
+    prune = False
+    
+    leaves = mcot.tree._all_leaves()
+    sel = (*leaves.long().T, )
+    
+    if args.thresh_type == 'sigma':
+        val = mcot.tree.data[sel][..., -1]
+        if args.density_softplus:
+            val = _SOFTPLUS_M1(val)
+    elif args.thresh_type == 'num_visits':
+        assert args.record_tree, 'Pruning by num_visits is only accessible when record_tree option is true.'
+    elif args.thresh_type == 'weight':
+        val = instant_weights[sel]
+        
+    val = torch.nan_to_num(val, nan=0)
+    
+    if args.use_threshold and epoch_id % args.thresh_epochs == 0:
+    # if args.use_threshold and epoch_id == 0:
+        prune = True
+        if args.thresh_method == 'constant':
+            thred = args.thresh_val
+        else:
+            thred = threshold(val, args.thresh_method, args.thresh_gaussian_sigma)
+            # thred = min(thred, args.prune_max)
+
+        summary_writer.add_scalar(f'train/thred', thred, gstep_id)
+        print(f'Prunning at {thred}/{val.max()}')
+        pre_sel = None
+
+        while True:
+            sel = leaves[val < thred]
+            nids, counts = torch.unique(sel[:, 0], return_counts=True)
+            # discover the fronts whose all children are included in sel
+            mask = (counts>=int(mcot.tree.N**3*args.thresh_tol)).numpy()
+
+            sel_nids = nids[mask]
+            print(f'sel_nids:{sel_nids.shape}')
+            parent_sel = (*mcot.tree._unpack_index(
+                mcot.tree.parent_depth[sel_nids, 0]).long().T,)
+
+            if pre_sel is not None:
+                if torch.equal(pre_sel, sel_nids) or sel_nids.size(0) == 0:
+                    break
+
+            pre_sel = sel_nids
+            mcot.merge(sel_nids)
+            # mcot.tree.check_integrity()
+
+            if not args.recursive_thred:
+                break
+
+            print(f'Prune {len(sel_nids)*mcot.tree.N ** 3}/{leaves.size(0)}')
+
+            reduced = instant_weights[sel_nids].view(-1, mcot.tree.N ** 3).sum(-1)
+            leaves = mcot.tree._all_leaves()
+            instant_weights[parent_sel] = reduced
+
+            if args.thresh_type == 'weight':
+                val = instant_weights[(*leaves.long().T, )]
+            elif args.thresh_type == 'sigma':
+                val_ = mcot.tree.data[(*leaves.long().T, )][..., -1]
+                if args.density_softplus:
+                    val = _SOFTPLUS_M1(val_)
+            val = torch.nan_to_num(val, nan=0)
     
 
     if args.policy == 'hybrid' and args.record_tree and epoch_id == args.hybrid_to_pareto:
         print('Change the policy on selection...')
         mcot.policy = 'pareto'
 
-    print('Start sampling...')
-    val, leaves = update_val_leaves(instant_weights)
-    sample_k = int(max(1, player.n_leaves*sampling_rate))
-    idxs = mcot.select(sample_k, val, leaves)
-    # print(f'{idxs.size(0)}/{sample_k}')
-    if args.record_tree:
-        mcot.backtrace(val, leaves)
-    mcot.expand(idxs)
+    if not prune:
+        print('Start sampling...')
+        sample_k = int(max(1, player.n_leaves*sampling_rate))
+        idxs = mcot.select(sample_k, val, leaves)
+        # print(f'{idxs.size(0)}/{sample_k}')
+        if args.record_tree:
+            mcot.backtrace(val, leaves)
+        mcot.expand(idxs)
 
     summary_writer.add_scalar(f'train/num_nodes', player.n_leaves, gstep_id)
     summary_writer.add_scalar(f'train/depth', player.get_depth(), gstep_id)
+    sel = (*mcot.tree._all_leaves().long().T, )
+
+
 
     if args.log_weight:
         summary_writer.add_histogram(f'train/weight_iter_{gstep_id}', instant_weights[sel], 0)

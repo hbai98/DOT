@@ -493,8 +493,8 @@ class MCOT(nn.Module):
         data.grad.zero_()
 
     def _sigma(self):
-        val = self.tree[:]
-        val = val[...,-1]
+        sel = (*self.tree._all_leaves().long().T, )
+        val = self.tree.data[sel][..., -1]
         if self.density_softplus:
             val = _SOFTPLUS_M1(val)
         return val

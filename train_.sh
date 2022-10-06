@@ -14,9 +14,9 @@ module load cuda-11.4
 source activate
 conda activate Adnerf
 
-experiment_name=mcots/test/thresh_method/weight/init_6/weight_triangle
+experiment_name=mcots/test/thresh_method/weight/init_6/li_weight
 
-config=opt/configs/syn.json
+config=args.json
 CKPT_DIR=checkpoints/${experiment_name}
 data_dir=data/nerf_synthetic/drums
 mkdir -p $CKPT_DIR
@@ -26,7 +26,7 @@ echo Launching experiment ${expriment_name}
 echo CKPT $CKPT_DIR
 echo LOGFILE $NOHUP_FILE
 # python -m unittest test.test_mcots.TestMCOTS.test_run_a_round
-python opt/ad_opt.py -t $CKPT_DIR ${data_dir} -c ${config}  > $NOHUP_FILE 2>&1  
+python opt/ad_opt_2.py -t $CKPT_DIR ${data_dir} -c ${config}  > $NOHUP_FILE 2>&1  
 echo DETACH
 
 # CUDA_VISIBLE_DEVICES=6
