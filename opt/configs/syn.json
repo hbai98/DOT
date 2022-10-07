@@ -9,7 +9,7 @@
     "lr_sh_decay_steps": 1e4,
     "lr_sh_delay_steps": 0,
     "lr_sh_delay_mult": 0.01,
-    "prune_tol_ratio":0.1,
+    "prune_tol_ratio":0.05,
 
     "use_sparsity_loss":false,
     "init_weight_sparsity_loss":1e-3,
@@ -22,7 +22,9 @@
     "hessian_mse_delay_steps": 0,
     "hessian_mse_decay_steps":5e3,
 
-    "init_refine":7,
+    "mse_weights":5e1,
+
+    "init_refine":6,
     "depth_limit":12,
 
     "sigma_thresh":1e-3,
@@ -36,7 +38,7 @@
     "density_softplus":true,
 
     "step_size":1e-5,   
-    "batch_size":5,  
+    "batch_size":1,  
     "sampling_rate":1e-1,
     "sampling_rate_final":1e-2,
     "sampling_rate_decay_steps":5e3,

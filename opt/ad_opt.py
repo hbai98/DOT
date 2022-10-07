@@ -62,6 +62,9 @@ group.add_argument('--hessian_mse_delay_steps', type=int, default=0,
                    help="Reverse cosine steps (0 means disable)")
 group.add_argument('--hessian_mse_delay_mult', type=float,
                    default=1e-2)  # 1e-4)#1e-4)
+group.add_argument('--mse_weights', type=float,
+                   default=5.0,
+                   )
 group.add_argument('--hessian_tolerance', type=int, default=5,
                    help="the limit number of counter for hessian mse check")
 
@@ -201,6 +204,7 @@ group.add_argument('--tune_mode', action='store_true', default=False,
                    help='hypertuning mode (do not save, for speed)')
 group.add_argument('--tune_nosave', action='store_true', default=False,
                    help='do not save any checkpoint even at the end')
+
 
 group = parser.add_argument_group("losses")
 group.add_argument('--weight_decay_sigma', type=float, default=1.0)
@@ -404,10 +408,12 @@ def prune_func(instant_weights):
         # thred = min(thred, args.prune_max)
     if thred is None:
         assert False, 'Threshold is wrong.'
+    contrast = (val.max()-val.min())*args.prune_tol_ratio
     summary_writer.add_scalar(f'train/thred', thred, gstep_id)
+    summary_writer.add_scalar(f'train/thred_goal', contrast, gstep_id)
 
-    if thred >= (val.max()-val.min())*args.prune_tol_ratio:
-        print(f'thred:{thred}, goal:{val.max()*args.prune_tol_ratio}')
+    if thred >= contrast:
+        print(f'thred:{thred}, goal:{contrast}')
         return None, None
     
     pre_sel = None
@@ -496,7 +502,8 @@ def train_step():
             mse.backward()
             mcot.optim_basis_all_step(
                 lr_sigma, lr_sh, beta=args.rms_beta, optim=args.sh_optim)
-            weight = accum.value * torch.exp(-mse)
+            weight = accum.value * torch.exp(-args.mse_weights*mse)
+            # weight = accum.value
             weights.append(weight)
             # instant_weights += mcot.tree.data.grad[...,:-1].mean(dim=-1)+mcot.tree.data.grad[...,-1]
             mcot.tree.data.grad.zero_()
@@ -530,9 +537,10 @@ def train_step():
             
         if not prune:
             val, leaves = prune_func(instant_weights)
-            prune = True
+            
         if val is not None:
             sel = leaves
+            prune = True
                 
         sigma = mcot._sigma()
         if sigma.max().isinf():
@@ -602,8 +610,6 @@ def train_step():
 
     if args.log_weight:
         summary_writer.add_histogram(f'train/weight_iter_{gstep_id}', instant_weights[sel], 0)
-
-
 
 with tqdm(total=args.depth_limit) as pbar:
     player = mcot.tree
