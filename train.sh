@@ -14,7 +14,7 @@ module load cuda-11.4
 source activate
 conda activate Adnerf
 
-experiment_name=mcots/test/thresh_method/weight/init_6/weight_triangle
+experiment_name=mcots/test/thresh_method/weight/init_6/weight_0.2
 
 config=opt/configs/syn.json
 CKPT_DIR=checkpoints/${experiment_name}

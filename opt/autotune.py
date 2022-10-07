@@ -69,9 +69,10 @@ def run_exp(env, eval_mode:bool, enable_render:bool, train_dir, data_dir, config
             f.write(opt_ret)
 
     if eval_mode:
+        _PATH = os.path.dirname(ckpt_path)
         eval_base_cmd = [
             "python", "render_imgs.py",
-            ckpt_path,
+            _PATH,
             data_dir
         ]
         if config != '':

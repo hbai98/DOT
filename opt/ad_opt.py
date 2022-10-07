@@ -24,7 +24,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import os
 # torch.cuda.set_device(6) 
-os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
+# os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 parser = argparse.ArgumentParser()
@@ -394,6 +394,7 @@ def prune_func(instant_weights):
         assert args.record_tree, 'Pruning by num_visits is only accessible when record_tree option is true.'
     elif args.thresh_type == 'weight':
         val = instant_weights[sel]
+        
     val = torch.nan_to_num(val, nan=0)
     
     if args.thresh_method == 'constant':
@@ -401,12 +402,16 @@ def prune_func(instant_weights):
     else:
         thred = threshold(val, args.thresh_method, args.thresh_gaussian_sigma)
         # thred = min(thred, args.prune_max)
+    if thred is None:
+        assert False, 'Threshold is wrong.'
     summary_writer.add_scalar(f'train/thred', thred, gstep_id)
 
-    if thred >= val.max()*args.prune_tol_ratio:
+    if thred >= (val.max()-val.min())*args.prune_tol_ratio:
+        print(f'thred:{thred}, goal:{val.max()*args.prune_tol_ratio}')
         return None, None
     
     pre_sel = None
+    print(f'Prunning at {thred}/{val.max()}')
 
     while True:
         sel = leaves[val < thred]
@@ -424,7 +429,6 @@ def prune_func(instant_weights):
 
         pre_sel = sel_nids
         mcot.merge(sel_nids)
-        print(f'Prunning at {thred}/{val.max()}')
         print(f'Prune {len(sel_nids)*mcot.tree.N ** 3}/{leaves.size(0)}')
 
         reduced = instant_weights[sel_nids].view(-1, mcot.tree.N ** 3).sum(-1)
@@ -449,6 +453,7 @@ def train_step():
     leaves = mcot.tree._all_leaves()
     sel = (*leaves.long().T, )
     
+    prune = False
     # stimulate
     while True:
         # important to make the learned properties stable.
@@ -460,7 +465,7 @@ def train_step():
                     dset.rays.dirs[indexer], viewdirs[indexer])
         gt = dset.rays.gt[indexer]        
         # updata params
-        instant_weights = torch.zeros_like(player.child, device=device, dtype=player.data.dtype)
+        # instant_weights = torch.zeros_like(player.child, device=device, dtype=player.data.dtype)
         weights = []
         for iter_id, batch_begin in enumerate(range(0, num_rays, batch_size)):
             gstep_id = iter_id + gstep_id_base
@@ -488,11 +493,14 @@ def train_step():
                 mse = mse.unsqueeze(0)
                 mse += loss_sparsity
                 
-            mcot.tree.zero_grad()
             mse.backward()
             mcot.optim_basis_all_step(
                 lr_sigma, lr_sh, beta=args.rms_beta, optim=args.sh_optim)
-            
+            weight = accum.value
+            weights.append(weight)
+            # instant_weights += mcot.tree.data.grad[...,:-1].mean(dim=-1)+mcot.tree.data.grad[...,-1]
+            mcot.tree.data.grad.zero_()
+                        
             if args.use_sparsity_loss:
                 optim.step()
                 optim.zero_grad()
@@ -506,17 +514,24 @@ def train_step():
             stats['psnr'] += psnr
             stats['invsqr_mse'] += 1.0 / mse_num ** 2
 
-            weight = accum.value
-            # sel = [*mcot.tree._all_leaves().long().T, ]
-            # weight = weight[sel]
-            # mse reduction
-            instant_weights += weight
-
-            if args.use_variance:
-                # weight varibility
-                weights.append(weight)
-
-        val, leaves = prune_func(instant_weights)
+        # check if the model gets stable by hessian mse
+        delta_mse = stats['mse']-pre_mse
+        abs_dmse = np.abs(delta_mse)
+        _hessian_mse = np.abs(abs_dmse-pre_delta_mse)
+        pre_mse = stats['mse']
+        pre_delta_mse = abs_dmse
+        
+        instant_weights = torch.stack(weights, dim=-1).sum(-1)
+        # calculate val_weights
+        if args.use_variance:
+            var = torch.var(torch.stack(weights, dim=0), dim=0)
+            instant_weights = torch.stack(
+                [instant_weights, var], dim=-1)
+            instant_weights = instant_weights.mean(-1)
+            
+        if not prune:
+            val, leaves = prune_func(instant_weights)
+            prune = True
         if val is not None:
             sel = leaves
                 
@@ -526,7 +541,7 @@ def train_step():
         sigma = torch.nan_to_num(sigma, nan=0)
         summary_writer.add_histogram(f'train/sigma', sigma, gstep_id)
             
-        pre_instantweight = instant_weights[sel]    
+        # pre_instantweight = instant_weights[sel]    
         # log
         if args.use_sparsity_loss:
             summary_writer.add_scalar(
@@ -542,11 +557,7 @@ def train_step():
         summary_writer.add_scalar(
             'train/sampling_rate', sampling_rate, gstep_id)
 
-        # check if the model gets stable by hessian mse
-        delta_mse = np.abs(stats['mse']-pre_mse)
-        _hessian_mse = np.abs(delta_mse-pre_delta_mse)
-        pre_mse = stats['mse']
-        pre_delta_mse = delta_mse
+
         summary_writer.add_scalar('train/hessian_mse', _hessian_mse, gstep_id)
 
         for stat_name in stats:
@@ -557,12 +568,6 @@ def train_step():
         if _hessian_mse < hessian_mse:
             counter += 1
             if counter > args.hessian_tolerance:
-                # calculate val_weights
-                if args.use_variance:
-                    var = torch.var(torch.stack(weights, dim=0), dim=0)
-                    instant_weights = torch.stack(
-                        [instant_weights, var], dim=-1)
-                    instant_weights = instant_weights.mean(-1)
                 break
 
         gstep_id_base += rays_per_batch
@@ -618,6 +623,6 @@ with tqdm(total=args.depth_limit) as pbar:
         train_step()
         delta_depth = (player.get_depth()-depth).item()
 
-        if depth >= args.depth_limit:
+        if depth >= args.depth_limit or mcot.tree.n_leaves > 2.8e7:
             break
         # gc.collect()

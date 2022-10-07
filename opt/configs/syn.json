@@ -9,7 +9,7 @@
     "lr_sh_decay_steps": 1e4,
     "lr_sh_delay_steps": 0,
     "lr_sh_delay_mult": 0.01,
-    "prune_tol_ratio":0.05,
+    "prune_tol_ratio":0.1,
 
     "use_sparsity_loss":false,
     "init_weight_sparsity_loss":1e-3,
@@ -18,17 +18,17 @@
     "rms_beta":0.95,
   
     "hessian_mse":5e-4,
-    "hessian_mse_final":5e-7,
+    "hessian_mse_final":5e-6,
     "hessian_mse_delay_steps": 0,
     "hessian_mse_decay_steps":5e3,
 
-    "init_refine":6,
-    "depth_limit":16,
+    "init_refine":7,
+    "depth_limit":12,
 
     "sigma_thresh":1e-3,
     "stop_thresh":0,
     "thresh_type":"weight",
-    "thresh_method":"trianle",
+    "thresh_method":"triangle",
     "thresh_val":0.25,
     "thresh_gaussian_sigma":3,
     "thresh_tol":1,

@@ -77,6 +77,8 @@ def threshold(data_, method, sigma=3):
         return torch.tensor(threshold_minimum(data), device=device)
     elif method=='triangle':
         return torch.tensor(threshold_triangle(data), device=device)
+    else:
+        assert False, f'the method {method} is not implemented.'
 
 def posenc(
     x: torch.Tensor,
