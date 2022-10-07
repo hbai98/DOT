@@ -496,7 +496,7 @@ def train_step():
             mse.backward()
             mcot.optim_basis_all_step(
                 lr_sigma, lr_sh, beta=args.rms_beta, optim=args.sh_optim)
-            weight = accum.value
+            weight = accum.value * torch.exp(-mse)
             weights.append(weight)
             # instant_weights += mcot.tree.data.grad[...,:-1].mean(dim=-1)+mcot.tree.data.grad[...,-1]
             mcot.tree.data.grad.zero_()
@@ -504,7 +504,6 @@ def train_step():
             if args.use_sparsity_loss:
                 optim.step()
                 optim.zero_grad()
-
                     
             mse_num: float = mse.detach().item()
             psnr = -10.0 * math.log10(mse_num)
