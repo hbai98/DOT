@@ -630,4 +630,4 @@ with tqdm(total=args.depth_limit) as pbar:
 
         if depth >= args.depth_limit or mcot.tree.n_leaves > 2.8e7:
             break
-        # gc.collect()
+        gc.collect()

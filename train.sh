@@ -14,9 +14,11 @@ module load cuda-11.4
 source activate
 conda activate Adnerf
 
-experiment_name=mcots/test/thresh_method/weight/init_6/weight_mse_batch_1
+experiment_name=mcots/test/thresh_method/weight/init_1/weight_mse
 
+# config=opt/configs/syn_b1.json
 config=opt/configs/syn.json
+
 CKPT_DIR=checkpoints/${experiment_name}
 data_dir=data/nerf_synthetic/drums
 mkdir -p $CKPT_DIR
