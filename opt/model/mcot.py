@@ -9,6 +9,8 @@ from svox.svox import _get_c_extension
 import numpy as np
 from .utils import pareto_2d, _SOFTPLUS_M1
 from einops import rearrange
+from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo
+import sys
 _C = _get_c_extension()
 
 
@@ -135,17 +137,26 @@ class SMCT(N3Tree):
         """
         cap_needed = max(cap_needed, int(
             self.capacity * (self.geom_resize_fact - 1.0)))
-        may_oom = self.capacity + cap_needed > 1e7  # My CPU Memory is limited
-        if may_oom:
-            print('Potential OOM: shift to cpu. It will be extremely slow.')
-            # Potential OOM prevention hack
-            self.data = nn.Parameter(self.data.cpu())
-
+        # may_oom = self.capacity + cap_needed > 2.8e7  # My CPU Memory is limited
+        # if may_oom:
+        #     # print('Potential OOM: shift to cpu. It will be extremely slow.')
+        #     print('Out of memory. Stop sampling.')
+        #     # Potential OOM prevention hack
+        #     # self.data = nn.Parameter(self.data.cpu())
+        #     return False
+        nvmlInit()
+        h = nvmlDeviceGetHandleByIndex(0)
+        info = nvmlDeviceGetMemoryInfo(h)
+        need = sys.getsizeof(torch.zeros((cap_needed, *self.data.data.shape[1:]),
+                                                        dtype=self.data.dtype,).storage())
+        if info.free < need:
+            print('Memory runs out, and stop sampling.')
+            return False
+                
         self.data = nn.Parameter(torch.cat((self.data.data,
                                             torch.zeros((cap_needed, *self.data.data.shape[1:]),
                                                         dtype=self.data.dtype,
                                                         device=self.data.device)), dim=0))
-
         self.child = torch.cat((self.child,
                                 torch.zeros((cap_needed, *self.child.shape[1:]),
                                             dtype=self.child.dtype,
@@ -154,46 +165,120 @@ class SMCT(N3Tree):
                                        torch.zeros((cap_needed, *self.parent_depth.shape[1:]),
                                                    dtype=self.parent_depth.dtype,
                                                    device=self.data.device)))
-
-    def _refine_at(self, intnode_idx, xyzi):
+        return True
+    
+    def refine(self, repeats=1, sel=None):
         """
-        Advanced: refine specific leaf node. Mostly for testing purposes.
+        Refine each selected leaf node, respecting depth_limit.
 
-        :param intnode_idx: index of internal node for identifying leaf
-        :param xyzi: tuple of size 3 with each element in :code:`{0, ... N-1}`
-                    in xyz orde rto identify leaf within internal node
+        :param repeats: int number of times to repeat refinement
+        :param sel: :code:`(N, 4)` node selector. Default selects all leaves.
+
+        :return: True iff N3Tree.data parameter was resized, requiring
+                 optimizer reinitialization if you're using an optimizer
+
+        .. warning::
+            The parameter :code:`tree.data` can change due to refinement. If any refine() call returns True, please re-make any optimizers
+            using :code:`tree.params()`.
+
+        .. warning::
+            The selector :code:`sel` is assumed to contain unique leaf indices. If there are duplicates
+            memory will be wasted. We do not dedup here for efficiency reasons.
 
         """
         if self._lock_tree_structure:
             raise RuntimeError("Tree locked")
-        assert min(xyzi) >= 0 and max(xyzi) < self.N
-        if self.parent_depth[intnode_idx, 1] >= self.depth_limit:
-            return
+        with torch.no_grad():
+            resized = False
+            for repeat_id in range(repeats):
+                filled = self.n_internal
+                if sel is None:
+                    # Default all leaves
+                    sel = (*self._all_leaves().T,)
+                depths = self.parent_depth[sel[0], 1]
+                # Filter by depth & leaves
+                good_mask = (depths < self.depth_limit) & (self.child[sel] == 0)
+                sel = [t[good_mask] for t in sel]
+                leaf_node =  torch.stack(sel, dim=-1).to(device=self.data.device)
+                num_nc = len(sel[0])
+                if num_nc == 0:
+                    # Nothing to do
+                    return False
+                new_filled = filled + num_nc
 
-        xi, yi, zi = xyzi
-        if self.child[intnode_idx, xi, yi, zi] != 0:
-            # Already has child
-            return
+                cap_needed = new_filled - self.capacity
+                if cap_needed > 0:
+                    resized = self._resize_add_cap(cap_needed)
+                    # resized = True
+                    if not resized:
+                        return resized
 
-        resized = False
-        filled = self.n_internal
-        if filled >= self.capacity:
-            self._resize_add_cap(1)
-            resized = True
+                new_idxs = torch.arange(filled, filled + num_nc,
+                        device=leaf_node.device, dtype=self.child.dtype) # NNC
 
-        self.child[filled] = 0
-        self.child[intnode_idx, xi, yi, zi] = filled - intnode_idx
-        depth = self.parent_depth[intnode_idx, 1] + 1
-        self.parent_depth[filled, 0] = self._pack_index(torch.tensor(
-            [[intnode_idx, xi, yi, zi]], dtype=torch.int32))[0]
-        self.parent_depth[filled, 1] = depth
-        # the data is initalized as zero for furhter processing(expansion)
-        # self.data.data[filled, :, :, :] = self.data.data[intnode_idx, xi, yi, zi]
-        # the data is kept as original for further inferencing
-        # self.data.data[intnode_idx, xi, yi, zi] = 0
-        self._n_internal += 1
-        self._invalidate()
+                self.child[filled:new_filled] = 0
+                self.child[sel] = new_idxs - leaf_node[:, 0].to(torch.int32)
+                self.data.data[filled:new_filled] = self.data.data[
+                        sel][:, None, None, None]
+                self.parent_depth[filled:new_filled, 0] = self._pack_index(leaf_node)  # parent
+                self.parent_depth[filled:new_filled, 1] = self.parent_depth[
+                        leaf_node[:, 0], 1] + 1  # depth
+
+                if repeat_id < repeats - 1:
+                    # Infer new selector
+                    t1 = torch.arange(filled, new_filled,
+                            device=self.data.device).repeat_interleave(self.N ** 3)
+                    rangen = torch.arange(self.N, device=self.data.device)
+                    t2 = rangen.repeat_interleave(self.N ** 2).repeat(
+                            new_filled - filled)
+                    t3 = rangen.repeat_interleave(self.N).repeat(
+                            (new_filled - filled) * self.N)
+                    t4 = rangen.repeat((new_filled - filled) * self.N ** 2)
+                    sel = (t1, t2, t3, t4)
+                self._n_internal += num_nc
+        if repeats > 0:
+            self._invalidate()
         return resized
+    
+    # def _refine_at(self, intnode_idx, xyzi):
+    #     """
+    #     Advanced: refine specific leaf node. Mostly for testing purposes.
+
+    #     :param intnode_idx: index of internal node for identifying leaf
+    #     :param xyzi: tuple of size 3 with each element in :code:`{0, ... N-1}`
+    #                 in xyz orde rto identify leaf within internal node
+
+    #     """
+    #     if self._lock_tree_structure:
+    #         raise RuntimeError("Tree locked")
+    #     assert min(xyzi) >= 0 and max(xyzi) < self.N
+    #     if self.parent_depth[intnode_idx, 1] >= self.depth_limit:
+    #         return
+
+    #     xi, yi, zi = xyzi
+    #     if self.child[intnode_idx, xi, yi, zi] != 0:
+    #         # Already has child
+    #         return
+
+    #     resized = False
+    #     filled = self.n_internal
+    #     if filled >= self.capacity:
+    #         self._resize_add_cap(1)
+    #         resized = True
+
+    #     self.child[filled] = 0
+    #     self.child[intnode_idx, xi, yi, zi] = filled - intnode_idx
+    #     depth = self.parent_depth[intnode_idx, 1] + 1
+    #     self.parent_depth[filled, 0] = self._pack_index(torch.tensor(
+    #         [[intnode_idx, xi, yi, zi]], dtype=torch.int32))[0]
+    #     self.parent_depth[filled, 1] = depth
+    #     # the data is initalized as zero for furhter processing(expansion)
+    #     # self.data.data[filled, :, :, :] = self.data.data[intnode_idx, xi, yi, zi]
+    #     # the data is kept as original for further inferencing
+    #     # self.data.data[intnode_idx, xi, yi, zi] = 0
+    #     self._n_internal += 1
+    #     self._invalidate()
+    #     return resized
 
 
 class MCOT(nn.Module):
@@ -213,8 +298,9 @@ class MCOT(nn.Module):
                  p_sel=['ctb'],
                  density_softplus=True,
                  record=True,
-                 use_sparse=True,
                  init_weight_sparsity_loss=0.01,
+                 init_tv_sigma_loss=0.01,
+                 init_tv_color_loss=0.01,
                  ):
         """Main mcts based octree data structure
 
@@ -259,8 +345,12 @@ class MCOT(nn.Module):
         self.density_softplus = density_softplus
         self.record = record
 
-        if use_sparse:
+        if init_weight_sparsity_loss is not None:
             self.w_sparsity = torch.nn.Parameter(torch.tensor([init_weight_sparsity_loss], device=device))
+        if init_tv_sigma_loss is not None:
+            self.w_sigma_tv = torch.nn.Parameter(torch.tensor([init_tv_sigma_loss], device=device)) 
+        if init_tv_color_loss is not None:
+            self.w_color_tv = torch.nn.Parameter(torch.tensor([init_tv_color_loss], device=device))        
         if record:
             self.register_buffer("num_visits", torch.zeros(
                 n_nodes, N, N, N, dtype=torch.int32, device=device))
@@ -409,11 +499,11 @@ class MCOT(nn.Module):
         return VolumeRenderer(self.tree, step_size=self.step_size,
                               sigma_thresh=self.sigma_thresh, stop_thresh=self.stop_thresh, density_softplus=self.density_softplus)
 
-    def expand(self, idxs):
+    def expand(self, idxs, repeats):
         # group expansion
         i = idxs.size(0)
         idxs = (*idxs.long().T,)
-        res = self.tree.refine(sel=idxs)
+        res = self.tree.refine(sel=idxs, repeats=repeats)
 
         # # clean up memory on internal nodes' data
         # sel = [*self.tree._all_internals().T.long(),]
@@ -496,6 +586,10 @@ class MCOT(nn.Module):
         val = self.tree.data[sel][..., -1]
         if self.density_softplus:
             val = _SOFTPLUS_M1(val)
+        return val
+    def _color(self):
+        sel = (*self.tree._all_leaves().long().T, )
+        val = self.tree.data[sel][..., :-1]
         return val
 def get_expon_func(
         lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000):
