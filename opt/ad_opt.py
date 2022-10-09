@@ -328,9 +328,9 @@ if args.use_sparsity_loss:
                         'lr': args.lr_sparsity_loss, 'name': 'sparsity_loss'})
 if args.use_tv_loss:
     param_groups.append({'params': [mcot.w_sigma_tv, mcot.w_color_tv],
-                        'lr': args.lr_tv_loss, 'name': 'sparsity_loss'})
+                        'lr': args.lr_tv_loss, 'name': 'tv_loss'})
 if len(param_groups) != 0:
-    optim = torch.optim.Adam(param_groups, lr=args.lr_sparsity_loss)
+    optim = torch.optim.Adam(param_groups)
 
 
 def eval_step():
@@ -485,8 +485,6 @@ def train_step():
     batch_size = dset.h*dset.w*args.batch_size
     num_rays = dset.rays.origins.size(0)
     rays_per_batch = (num_rays-1)//batch_size+1
-    # leaves = mcot.tree._all_leaves()
-    # sel = (*leaves.long().T, )
 
     prune = False
     # stimulate
@@ -525,14 +523,13 @@ def train_step():
                 rgb_pred = render.forward(b_rays, cuda=device == 'cuda')
 
             mse = F.mse_loss(rgb_gt, rgb_pred)
-            loss = mse
+            loss = mse.unsqueeze(0)
 
             if args.use_sparsity_loss:
                 sigma = mcot._sigma()
                 # loss_sparsity = torch.abs(mcot.w_sparsity)*torch.abs(1-args.sparse_weight*torch.exp(-sigma)).mean()
                 # Cauchy version (from SNeRG)
-                loss_sparsity = mcot.w_sparsity*torch.log(1+2*sigma*sigma).mean()
-                mse = mse.unsqueeze(0)
+                loss_sparsity = mcot._w_sparsity*torch.log(1+2*sigma*sigma).mean()
                 loss += loss_sparsity
 
             if args.use_tv_loss:
@@ -543,8 +540,14 @@ def train_step():
                     sigma = _SOFTPLUS_M1(sigma)
                 color = rearrange(color, 'n x y z d -> (n d) (x y z)')
                 sigma = rearrange(sigma, 'n x y z -> n (x y z)')
-                loss_tv =  mcot.w_color_tv*torch.var(color, dim=-1).mean()+\
-                    mcot.w_sigma_tv*torch.var(sigma, dim=-1).mean()
+                loss_tv =  mcot._w_color_tv*torch.var(color, dim=-1).mean()+\
+                    mcot._w_sigma_tv*torch.var(sigma, dim=-1).mean()
+                # print('var_color')
+                # print(torch.var(color, dim=-1).mean())
+                # print('var_sigma')
+                # print(torch.var(sigma, dim=-1).mean())
+                # print('var_loss_tv')
+                # print(loss_tv)
                 loss += loss_tv
 
             loss.backward()
@@ -563,13 +566,26 @@ def train_step():
                 optim.zero_grad()
 
             mse_num = mse.detach().item()
-            psnr = -10.0 * math.log10(mse_num)
+            if mse_num < 0:
+                assert False, 'Invalid mse'
+            psnr = -10.0 * np.log10(mse_num)
             if math.isnan(psnr):
                 assert False, 'NAN PSNR'
             stats['mse'] += mse_num
             stats['psnr'] += psnr
             stats['invsqr_mse'] += 1.0 / mse_num ** 2
-
+            
+            if args.use_sparsity_loss:
+                summary_writer.add_scalar(
+                    "train/w_sparsity", mcot._w_sparsity, global_step=gstep_id
+                )
+            if args.use_tv_loss:
+                summary_writer.add_scalar(
+                    "train/w_tv_color",  mcot._w_color_tv, global_step=gstep_id
+                )         
+                summary_writer.add_scalar(
+                    "train/w_tv_sigma", mcot._w_sigma_tv, global_step=gstep_id
+                )      
         # check if the model gets stable by hessian mse
         delta_mse = stats['mse']-pre_mse
         abs_dmse = np.abs(delta_mse)
@@ -609,17 +625,9 @@ def train_step():
 
         # pre_instantweight = instant_weights[sel]
         # log
-        if args.use_sparsity_loss:
-            summary_writer.add_scalar(
-                "train/w_sparsity", mcot.w_sparsity, global_step=gstep_id
-            )
-        if args.use_tv_loss:
-            summary_writer.add_scalar(
-                "train/w_tv_color", mcot.w_color_tv, global_step=gstep_id
-            )         
-            summary_writer.add_scalar(
-                "train/w_tv_sigma", mcot.w_sigma_tv, global_step=gstep_id
-            )      
+
+        
+
         summary_writer.add_scalar(
             f'train/num_nodes', player.n_leaves, gstep_id)
         summary_writer.add_scalar(f'train/depth', player.get_depth(), gstep_id)

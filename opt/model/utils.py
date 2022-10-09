@@ -6,6 +6,7 @@ import numpy as np
 from skimage.filters.thresholding import threshold_li, threshold_otsu, threshold_yen, threshold_minimum, threshold_triangle
 from skimage.filters._gaussian import gaussian
 
+
 class TreeConv(nn.Module):
     def __init__(self, in_channels, out_channels, degree, act='gelu', inplace=True):
         """
@@ -20,20 +21,23 @@ class TreeConv(nn.Module):
 
         """
         super().__init__()
-        self.conv = nn.Conv1d(in_channels, out_channels, kernel_size=degree, bias=True)
-        self.norm  = nn.LayerNorm(out_channels)
+        self.conv = nn.Conv1d(in_channels, out_channels,
+                              kernel_size=degree, bias=True)
+        self.norm = nn.LayerNorm(out_channels)
         self.act = create_act_layer(act, inplace=inplace)
+
     def forward(self, x):
         """
         x is expected to have shape (N, C, L) or (C, L), where L is the number of children
-        
+
         : return: the encoded leaf nodes' feature (out_channels)
         """
         x = self.conv(x).squeeze(-1)
         x = self.norm(x)
         x = self.act(x)
-        return x  
-    
+        return x
+
+
 def setup_render_opts(opt, args):
     """
     Pass render arguments to the Adtree renderer options
@@ -50,6 +54,8 @@ def setup_render_opts(opt, args):
     # opt.use_spheric_clip = args.use_spheric_clip
 
 # borrow from https://github.com/Ragheb2464/preto-front/blob/master/2d.py
+
+
 def pareto_2d(data):
     from operator import itemgetter
     sorted_data = sorted(data, key=itemgetter(0, 1), reverse=True)
@@ -62,23 +68,25 @@ def pareto_2d(data):
             cutt_off = sorted_data[i][1]
     return pareto_idx
 
+
 def threshold(data_, method, sigma=3):
     data = data_.cpu().detach().numpy()
     device = data_.device
     data = gaussian(data, sigma=sigma)
-    
+
     if method == 'li':
         return torch.tensor(threshold_li(data), device=device)
-    elif method=='otsu':
+    elif method == 'otsu':
         return torch.tensor(threshold_otsu(data), device=device)
-    elif method=='yen':
+    elif method == 'yen':
         return torch.tensor(threshold_yen(data), device=device)
     elif method == 'minimum':
         return torch.tensor(threshold_minimum(data), device=device)
-    elif method=='triangle':
+    elif method == 'triangle':
         return torch.tensor(threshold_triangle(data), device=device)
     else:
         assert False, f'the method {method} is not implemented.'
+
 
 def posenc(
     x: torch.Tensor,
@@ -115,16 +123,19 @@ def posenc(
     """
     if min_deg >= max_deg:
         return x
-    scales = torch.tensor([2 ** i for i in range(min_deg, max_deg)], device=x.device)
+    scales = torch.tensor(
+        [2 ** i for i in range(min_deg, max_deg)], device=x.device)
     half_enc_dim = x.shape[-1] * scales.shape[0]
-    shapeb = list(x.shape[:-1]) + [half_enc_dim]  # (..., D * (max_deg - min_deg))
+    # (..., D * (max_deg - min_deg))
+    shapeb = list(x.shape[:-1]) + [half_enc_dim]
     xb = torch.reshape((x[..., None, :] * scales[:, None]), shapeb)
     four_feat = torch.sin(
         torch.cat([xb, xb + 0.5 * np.pi], dim=-1)
     )  # (..., D * (max_deg - min_deg) * 2)
     if enable_ipe and cov_diag is not None:
         # Apply integrated positional encoding (IPE)
-        xb_var = torch.reshape((cov_diag[..., None, :] * scales[:, None] ** 2), shapeb)
+        xb_var = torch.reshape(
+            (cov_diag[..., None, :] * scales[:, None] ** 2), shapeb)
         xb_var = torch.tile(xb_var, (2,))  # (..., D * (max_deg - min_deg) * 2)
         four_feat = four_feat * torch.exp(-0.5 * xb_var)
     # if cutoff < 1.0:
@@ -139,5 +150,10 @@ def posenc(
         four_feat = torch.cat([x] + [four_feat], dim=-1)
     return four_feat
 
+
 def _SOFTPLUS_M1(x):
     return torch.log(torch.exp(x-1)+1)
+
+
+def asoftplus(x):
+    return x + torch.log(-torch.expm1(-x))

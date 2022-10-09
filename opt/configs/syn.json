@@ -9,15 +9,15 @@
     "lr_sh_decay_steps": 1e4,
     "lr_sh_delay_steps": 0,
     "lr_sh_delay_mult": 0.01,
-    "prune_tol_ratio":0.3,
+    "prune_tol_ratio":0.2,
 
-    "use_sparsity_loss":true,
+    "use_sparsity_loss":false,
     "init_weight_sparsity_loss":1e-2,
     "lr_sparsity_loss":1e-4,
-    "use_tv_loss":false,
-    "init_weight_tv_sigma_loss":1e-4,
-    "init_weight_tv_color_loss":1e-3,
-    "lr_tv_loss":1e-4,
+    "use_tv_loss":true,
+    "init_weight_tv_sigma_loss":1e-3,
+    "init_weight_tv_color_loss":1e-2,
+    "lr_tv_loss":1e-3,
 
 
     "rms_beta":0.95,

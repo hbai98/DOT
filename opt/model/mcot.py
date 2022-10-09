@@ -1,13 +1,13 @@
 import torch.nn as nn
 from svox import N3Tree, VolumeRenderer
 from svox.renderer import NDCConfig
-
+from torch.nn.functional import softplus
 import torch
 from svox.helpers import DataFormat
 from warnings import warn
 from svox.svox import _get_c_extension
 import numpy as np
-from .utils import pareto_2d, _SOFTPLUS_M1
+from .utils import pareto_2d, _SOFTPLUS_M1, asoftplus
 from einops import rearrange
 from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo
 import sys
@@ -346,11 +346,14 @@ class MCOT(nn.Module):
         self.record = record
 
         if init_weight_sparsity_loss is not None:
-            self.w_sparsity = torch.nn.Parameter(torch.tensor([init_weight_sparsity_loss], device=device))
+            _ = asoftplus(torch.tensor(init_weight_sparsity_loss))
+            self.w_sparsity = torch.nn.Parameter(torch.tensor([_], device=device))
         if init_tv_sigma_loss is not None:
-            self.w_sigma_tv = torch.nn.Parameter(torch.tensor([init_tv_sigma_loss], device=device)) 
+            _ = asoftplus(torch.tensor(init_tv_sigma_loss))
+            self.w_sigma_tv = torch.nn.Parameter(torch.tensor([_], device=device)) 
         if init_tv_color_loss is not None:
-            self.w_color_tv = torch.nn.Parameter(torch.tensor([init_tv_color_loss], device=device))        
+            _ = asoftplus(torch.tensor(init_tv_color_loss))
+            self.w_color_tv = torch.nn.Parameter(torch.tensor([_], device=device))        
         if record:
             self.register_buffer("num_visits", torch.zeros(
                 n_nodes, N, N, N, dtype=torch.int32, device=device))
@@ -362,6 +365,18 @@ class MCOT(nn.Module):
         nids = nids.to(device)
         idxs = [f in nids for f in self.tree._frontier]
         self.tree.merge(idxs)
+    @property
+    def _w_sparsity(self):
+        if self.w_sparsity is not None:
+            return softplus(self.w_sparsity)
+    @property
+    def _w_color_tv(self):
+        if self.w_sparsity is not None:
+            return softplus(self.w_color_tv)
+    @property
+    def _w_sigma_tv(self):
+        if self.w_sparsity is not None:
+            return softplus(self.w_sigma_tv)        
 
     def select(self, max_sel, reward, rw_idxs):
         """Deep first search based on policy value: from root to the tail.
