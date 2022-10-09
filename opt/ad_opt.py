@@ -525,6 +525,7 @@ def train_step():
                 rgb_pred = render.forward(b_rays, cuda=device == 'cuda')
 
             mse = F.mse_loss(rgb_gt, rgb_pred)
+            loss = mse
 
             if args.use_sparsity_loss:
                 sigma = mcot._sigma()
@@ -532,7 +533,7 @@ def train_step():
                 # Cauchy version (from SNeRG)
                 loss_sparsity = mcot.w_sparsity*torch.log(1+2*sigma*sigma).mean()
                 mse = mse.unsqueeze(0)
-                mse += loss_sparsity
+                loss += loss_sparsity
 
             if args.use_tv_loss:
                 sel = mcot.tree._frontier
@@ -544,9 +545,9 @@ def train_step():
                 sigma = rearrange(sigma, 'n x y z -> n (x y z)')
                 loss_tv =  mcot.w_color_tv*torch.var(color, dim=-1).mean()+\
                     mcot.w_sigma_tv*torch.var(sigma, dim=-1).mean()
-                mse += loss_tv
+                loss += loss_tv
 
-            mse.backward()
+            loss.backward()
             mcot.optim_basis_all_step(
                 lr_sigma, lr_sh, beta=args.rms_beta, optim=args.sh_optim)
             # weight = accum.value

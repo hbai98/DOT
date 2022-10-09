@@ -9,9 +9,9 @@
     "lr_sh_decay_steps": 1e4,
     "lr_sh_delay_steps": 0,
     "lr_sh_delay_mult": 0.01,
-    "prune_tol_ratio":0.2,
+    "prune_tol_ratio":0.3,
 
-    "use_sparsity_loss":false,
+    "use_sparsity_loss":true,
     "init_weight_sparsity_loss":1e-2,
     "lr_sparsity_loss":1e-4,
     "use_tv_loss":false,
