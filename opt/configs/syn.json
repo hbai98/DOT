@@ -12,11 +12,11 @@
     "prune_tol_ratio":0.2,
 
     "use_sparsity_loss":false,
-    "init_weight_sparsity_loss":1e-2,
-    "lr_sparsity_loss":1e-4,
+    "init_weight_sparsity_loss":1e-4,
+    "lr_sparsity_loss":1e-3,
     "use_tv_loss":true,
-    "init_weight_tv_sigma_loss":1e-3,
-    "init_weight_tv_color_loss":1e-2,
+    "init_weight_tv_sigma_loss":1e-5,
+    "init_weight_tv_color_loss":1e-3,
     "lr_tv_loss":1e-3,
 
 
@@ -35,8 +35,8 @@
     "sigma_thresh":1e-3,
     "stop_thresh":0,
     "thresh_type":"weight",
-    "thresh_method":"triangle",
-    "thresh_val":0.25,
+    "thresh_method":"constant",
+    "thresh_val":0.5,
     "thresh_gaussian_sigma":3,
     "thresh_tol":0.7,
 
@@ -48,7 +48,7 @@
     "sampling_rate_final":1e-2,
     "sampling_rate_decay_steps":1e3,
     "sample_after_prune":true,
-    "repeats":2,
+    "repeats":1,
     "pruneSampleRepeats":0,
 
     "use_variance":false,

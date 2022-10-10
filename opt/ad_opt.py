@@ -437,13 +437,13 @@ def prune_func(instant_weights):
         # thred = min(thred, args.prune_max)
     if thred is None:
         assert False, 'Threshold is wrong.'
-    contrast = (val.max()-val.min())*args.prune_tol_ratio
-    summary_writer.add_scalar(f'train/thred', thred, gstep_id)
-    summary_writer.add_scalar(f'train/thred_goal', contrast, gstep_id)
+    # contrast = (val.max()-val.min())*args.prune_tol_ratio
+    # summary_writer.add_scalar(f'train/thred', thred, gstep_id)
+    # summary_writer.add_scalar(f'train/thred_goal', contrast, gstep_id)
 
-    if thred >= contrast:
-        print(f'thred:{thred}, goal:{contrast}')
-        return None, None
+    # if thred >= contrast:
+    #     print(f'thred:{thred}, goal:{contrast}')
+    #     return None, None
 
     pre_sel = None
     print(f'Prunning at {thred}/{val.max()}')

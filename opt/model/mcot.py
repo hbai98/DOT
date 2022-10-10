@@ -167,6 +167,28 @@ class SMCT(N3Tree):
                                                    device=self.data.device)))
         return True
     
+    def _spec(self, world=True):
+        """
+        Pack tree into a TreeSpec (for passing data to C++ extension)
+        """
+        tree_spec = _C.TreeSpec()
+        tree_spec.data = self.data
+        tree_spec.child = self.child
+        tree_spec.parent_depth = self.parent_depth
+        tree_spec.extra_data = self.extra_data if self.extra_data is not None else \
+                torch.empty((0, 0), dtype=self.data.dtype, device=self.data.device)
+        tree_spec.offset = self.offset if world else torch.tensor(
+                  [0.0, 0.0, 0.0], dtype=self.data.dtype, device=self.data.device)
+        tree_spec.scaling = self.invradius if world else torch.tensor(
+                  [1.0, 1.0, 1.0], dtype=self.data.dtype, device=self.data.device)
+        if hasattr(self, '_weight_accum'):
+            tree_spec._weight_accum = self._weight_accum if \
+                    self._weight_accum is not None else torch.empty(
+                            0, dtype=self.data.dtype, device=self.data.device)
+            tree_spec._weight_accum_max = (self._weight_accum_op == 'max')
+        return tree_spec    
+    
+    
     def refine(self, repeats=1, sel=None):
         """
         Refine each selected leaf node, respecting depth_limit.
@@ -376,7 +398,9 @@ class MCOT(nn.Module):
     @property
     def _w_sigma_tv(self):
         if self.w_sparsity is not None:
-            return softplus(self.w_sigma_tv)        
+            return softplus(self.w_sigma_tv)       
+        
+ 
 
     def select(self, max_sel, reward, rw_idxs):
         """Deep first search based on policy value: from root to the tail.
