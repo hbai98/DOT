@@ -1,6 +1,6 @@
 import torch.nn as nn
-from svox import N3Tree, VolumeRenderer
-from svox.renderer import NDCConfig
+from svox import N3Tree, VolumeRenderer, LocalIndex
+from svox.renderer import NDCConfig, _rays_spec_from_rays
 from torch.nn.functional import softplus
 import torch
 from svox.helpers import DataFormat
@@ -12,6 +12,7 @@ from einops import rearrange
 from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo
 import sys
 _C = _get_c_extension()
+
 
 
 class SMCT(N3Tree):
@@ -399,9 +400,13 @@ class MCOT(nn.Module):
     def _w_sigma_tv(self):
         if self.w_sparsity is not None:
             return softplus(self.w_sigma_tv)       
+            
+    def reweight_rays(self, rays, error, opt):
+        assert error.size(0) == rays.origins.size(0)
+        with self.tree.accumulate_weights(op="sum") as accum:
+            _C.reweight_rays(self.tree._spec(), _rays_spec_from_rays(rays), opt, error)
+        return accum.value      
         
- 
-
     def select(self, max_sel, reward, rw_idxs):
         """Deep first search based on policy value: from root to the tail.
         Select the top k nodes.

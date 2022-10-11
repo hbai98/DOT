@@ -503,7 +503,6 @@ def train_step():
         s2 = torch.zeros_like(player.child, device=device,
                               dtype=player.data.dtype)  # E(x^2)
 
-        # weights = []
         for iter_id, batch_begin in enumerate(range(0, num_rays, batch_size)):
             gstep_id = iter_id + gstep_id_base
             batch_end = min(batch_begin + batch_size, num_rays)
@@ -518,10 +517,8 @@ def train_step():
             lr_sh = lr_sh_func(gstep_id) * lr_sh_factor
             hessian_mse = hessian_func(gstep_id) * hessian_factor
             sampling_rate = sampling_rate_func(gstep_id) * sampling_factor
-
-            with player.accumulate_weights(op="sum") as accum:
-                rgb_pred = render.forward(b_rays, cuda=device == 'cuda')
-
+            # with player.accumulate_weights(op="sum") as accum:
+            rgb_pred = render.forward(b_rays, cuda=device == 'cuda')
             mse = F.mse_loss(rgb_gt, rgb_pred)
             loss = mse.unsqueeze(0)
 
@@ -542,12 +539,6 @@ def train_step():
                 sigma = rearrange(sigma, 'n x y z -> n (x y z)')
                 loss_tv =  mcot._w_color_tv*torch.var(color, dim=-1).mean()+\
                     mcot._w_sigma_tv*torch.var(sigma, dim=-1).mean()
-                # print('var_color')
-                # print(torch.var(color, dim=-1).mean())
-                # print('var_sigma')
-                # print(torch.var(sigma, dim=-1).mean())
-                # print('var_loss_tv')
-                # print(loss_tv)
                 loss += loss_tv
 
             loss.backward()
@@ -556,7 +547,16 @@ def train_step():
             # weight = accum.value
             # weights.append(weight)
             with torch.no_grad():
-                weight = accum.value * torch.exp(-args.mse_weights*mse)
+                dif = rgb_gt-rgb_pred
+                error = torch.exp(-args.mse_weights*(dif*dif).sum(-1))
+                print((dif*dif).sum(-1).mean())
+                print((dif*dif).sum(-1).max())
+                
+                print(error.mean())
+                print(error.max())
+                weight = mcot.reweight_rays(b_rays, error, render._get_options())
+                print(weight.shape)
+                assert 0
                 s1 += weight
                 s2 += weight*weight
             mcot.tree.data.grad.zero_()
@@ -586,6 +586,7 @@ def train_step():
                 summary_writer.add_scalar(
                     "train/w_tv_sigma", mcot._w_sigma_tv, global_step=gstep_id
                 )      
+                
         # check if the model gets stable by hessian mse
         delta_mse = stats['mse']-pre_mse
         abs_dmse = np.abs(delta_mse)
@@ -622,11 +623,6 @@ def train_step():
             assert False, 'Inf density.'
         sigma = torch.nan_to_num(sigma, nan=0)
         summary_writer.add_histogram(f'train/sigma', sigma, gstep_id)
-
-        # pre_instantweight = instant_weights[sel]
-        # log
-
-        
 
         summary_writer.add_scalar(
             f'train/num_nodes', player.n_leaves, gstep_id)

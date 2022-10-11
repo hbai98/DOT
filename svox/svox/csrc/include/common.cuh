@@ -49,8 +49,6 @@ __device__ __inline__ void transform_coord(scalar_t* __restrict__ q,
     }
 }
 
-
-
 template <typename scalar_t>
 __device__ __inline__ scalar_t* query_single_from_root(
     torch::PackedTensorAccessor64<scalar_t, 5, torch::RestrictPtrTraits>

@@ -24,6 +24,8 @@ dependencies:
       - scipy>=1.6.0
       - timm
       - einops
+      - pynvml
+      - tensorboard
   - pytorch
   - torchvision
   - cudatoolkit

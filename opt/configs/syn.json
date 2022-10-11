@@ -27,7 +27,7 @@
     "hessian_mse_delay_steps": 0,
     "hessian_mse_decay_steps":5e3,
 
-    "mse_weights":5e1,
+    "mse_weights":1e1,
 
     "init_refine":6,
     "depth_limit":14,
@@ -44,9 +44,9 @@
 
     "step_size":1e-5,   
     "batch_size":5,  
-    "sampling_rate":1e-1,
+    "sampling_rate":2e-1,
     "sampling_rate_final":1e-2,
-    "sampling_rate_decay_steps":1e3,
+    "sampling_rate_decay_steps":1e4,
     "sample_after_prune":true,
     "repeats":1,
     "pruneSampleRepeats":0,

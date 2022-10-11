@@ -1133,8 +1133,6 @@ def _redirect_to_n3view():
         redirect_prop(redir_prop)
 _redirect_to_n3view()
 
-
-
 class WeightAccumulator():
     def __init__(self, tree, op):
         assert op in ['sum', 'max'], 'Unsupported accumulation'
