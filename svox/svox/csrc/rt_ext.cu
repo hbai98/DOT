@@ -220,6 +220,9 @@ __device__ __inline__ void reweight_ray(
         scalar_t t = tmin;
         scalar_t cube_sz;
         while (t < tmax) {
+            for (int j = 0; j < 3; ++j) {
+                pos[j] = ray.origin[j] + t * ray.dir[j];
+            }
             int64_t node_id;
             scalar_t* tree_val = query_single_from_root<scalar_t>(tree.data, tree.child,
                         pos, &cube_sz, tree.weight_accum != nullptr ? &node_id : nullptr);

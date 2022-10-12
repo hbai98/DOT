@@ -20,7 +20,7 @@ experiment_name=mcots/test/thresh_method/weight/test
 config=opt/configs/syn.json
 
 CKPT_DIR=checkpoints/${experiment_name}
-data_dir=data/nerf_synthetic/drums
+data_dir=/hy-tmp/nerf_synthetic/drums
 mkdir -p $CKPT_DIR
 NOHUP_FILE=$CKPT_DIR/log
 

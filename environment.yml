@@ -26,6 +26,8 @@ dependencies:
       - einops
       - pynvml
       - tensorboard
+      - scikit-image
+      - opencv-python
   - pytorch
   - torchvision
   - cudatoolkit
