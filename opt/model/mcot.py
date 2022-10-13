@@ -403,6 +403,8 @@ class MCOT(nn.Module):
             
     def reweight_rays(self, rays, error, opt):
         assert error.size(0) == rays.origins.size(0)
+        assert error.is_cuda 
+        self.tree._weight_accum = None
         with self.tree.accumulate_weights(op="sum") as accum:
             _C.reweight_rays(self.tree._spec(), _rays_spec_from_rays(rays), opt, error)
         return accum.value      

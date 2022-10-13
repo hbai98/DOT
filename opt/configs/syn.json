@@ -29,14 +29,14 @@
 
     "mse_weights":1e1,
 
-    "init_refine":6,
+    "init_refine":7,
     "depth_limit":14,
 
     "sigma_thresh":1e-3,
     "stop_thresh":0,
     "thresh_type":"weight",
     "thresh_method":"constant",
-    "thresh_val":0.5,
+    "thresh_val":0.25,
     "thresh_gaussian_sigma":3,
     "thresh_tol":0.7,
 

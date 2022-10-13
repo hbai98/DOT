@@ -517,8 +517,8 @@ def train_step():
             lr_sh = lr_sh_func(gstep_id) * lr_sh_factor
             hessian_mse = hessian_func(gstep_id) * hessian_factor
             sampling_rate = sampling_rate_func(gstep_id) * sampling_factor
-            # with player.accumulate_weights(op="sum") as accum:
-            rgb_pred = render.forward(b_rays, cuda=device == 'cuda')
+            with player.accumulate_weights(op="sum") as accum:
+                rgb_pred = render.forward(b_rays, cuda=device == 'cuda')
             mse = F.mse_loss(rgb_gt, rgb_pred)
             loss = mse.unsqueeze(0)
 
@@ -549,14 +549,13 @@ def train_step():
             with torch.no_grad():
                 dif = rgb_gt-rgb_pred
                 error = torch.exp(-args.mse_weights*(dif*dif).sum(-1))
-                print((dif*dif).sum(-1).mean())
-                print((dif*dif).sum(-1).max())
-                
+                print(b_rays.origins.shape)
                 print(error.mean())
                 print(error.max())
                 weight = mcot.reweight_rays(b_rays, error, render._get_options())
                 print(weight.shape)
                 assert 0
+                # weight = accum.value*torch.exp(-args.mse_weights*mse)
                 s1 += weight
                 s2 += weight*weight
             mcot.tree.data.grad.zero_()
@@ -603,7 +602,20 @@ def train_step():
             VAL = var*args.var_weight+s1
         else:
             VAL = s1
+            
+        val, leaves = prune_func(VAL)
+        # to thrust sampling with refine_numb
+        if args.sample_after_prune:
+            if args.pruneSampleRepeats == 0:
+                print('Stabalize it...')
+            else:
+                print('Sample globally after prunning...')
+            mcot.tree.refine(repeats=args.pruneSampleRepeats)
 
+        if val is not None:
+            sel = leaves
+            prune = True
+            
         sigma = mcot._sigma()
         if sigma.max().isinf():
             assert False, 'Inf density.'
@@ -651,19 +663,8 @@ def train_step():
         print('Change the policy on selection...')
         mcot.policy = 'pareto'
 
-    val, leaves = prune_func(VAL)
-    # to thrust sampling with refine_numb
-    if args.sample_after_prune:
-        if args.pruneSampleRepeats == 0:
-            print('Stabalize it...')
-        else:
-            print('Sample globally after prunning...')
-        mcot.tree.refine(repeats=args.pruneSampleRepeats)
 
-    if val is not None:
-        sel = leaves
-        prune = True
-    
+    continue_ = True
     if not prune:
         print('Start sampling...')
         val, leaves = update_val_leaves(VAL)

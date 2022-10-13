@@ -321,6 +321,77 @@ __device__ __inline__ void trace_ray(
 }
 
 template <typename scalar_t>
+__device__ __inline__ void reweight_ray(
+        PackedTreeSpec<scalar_t>& __restrict__ tree,
+        SingleRaySpec<scalar_t> ray,
+        RenderOptions& __restrict__ opt,
+        scalar_t in
+        ) {
+    const scalar_t delta_scale = _get_delta_scale(tree.scaling, ray.dir);
+
+    scalar_t tmin, tmax;
+    scalar_t invdir[3];
+    const int tree_N = tree.child.size(1);
+    const int data_dim = tree.data.size(4);
+
+#pragma unroll
+    for (int i = 0; i < 3; ++i) {
+        invdir[i] = 1.0 / (ray.dir[i] + 1e-9);
+    }
+    _dda_unit(ray.origin, invdir, &tmin, &tmax);
+
+    if (tmax < 0 || tmin > tmax) {
+        // Ray doesn't hit box
+        return;
+    } else {
+        scalar_t pos[3];
+        scalar_t basis_fn[25];
+        maybe_precalc_basis<scalar_t>(opt.format, opt.basis_dim,
+                tree.extra_data, ray.vdir, basis_fn);
+
+        scalar_t light_intensity = 1.f;
+        scalar_t t = tmin;
+        scalar_t cube_sz;
+        while (t < tmax) {
+            for (int j = 0; j < 3; ++j) {
+                pos[j] = ray.origin[j] + t * ray.dir[j];
+            }
+
+            int64_t node_id;
+            scalar_t* tree_val = query_single_from_root<scalar_t>(tree.data, tree.child,
+                        pos, &cube_sz, tree.weight_accum != nullptr ? &node_id : nullptr);
+
+            scalar_t att;
+            scalar_t subcube_tmin, subcube_tmax;
+            _dda_unit(pos, invdir, &subcube_tmin, &subcube_tmax);
+
+            const scalar_t t_subcube = (subcube_tmax - subcube_tmin) / cube_sz;
+            const scalar_t delta_t = t_subcube + opt.step_size;
+            scalar_t sigma = tree_val[data_dim - 1];
+            if (opt.density_softplus) sigma = _SOFTPLUS_M1(sigma);
+            if (sigma > opt.sigma_thresh) {
+                att = expf(-delta_t * delta_scale * sigma);
+                const scalar_t weight = light_intensity * (1.f - att);
+                light_intensity *= att;
+                if (tree.weight_accum != nullptr) {
+                    if (tree.weight_accum_max) {
+                        atomicMax(&tree.weight_accum[node_id], weight * in);
+                    } else {
+                        atomicAdd(&tree.weight_accum[node_id], weight * in);
+                    }
+                }
+
+                if (light_intensity <= opt.stop_thresh) {
+                    // Full opacity, stop
+                    return;
+                }
+            }
+            t += delta_t;
+        }
+    }
+}
+
+template <typename scalar_t>
 __device__ __inline__ void trace_ray_backward(
     PackedTreeSpec<scalar_t>& __restrict__ tree,
     const torch::TensorAccessor<scalar_t, 1, torch::RestrictPtrTraits, int32_t>
@@ -732,6 +803,25 @@ __global__ void render_ray_kernel(
         out[tid]);
 }
 
+template <typename scalar_t>
+__global__ void reweight_rays_kernel(
+        PackedTreeSpec<scalar_t> tree,
+        PackedRaysSpec<scalar_t> rays,
+        RenderOptions opt,
+        torch::PackedTensorAccessor32<scalar_t, 1, torch::RestrictPtrTraits>
+        error) {
+    CUDA_GET_THREAD_ID(tid, rays.origins.size(0));
+    scalar_t origin[3] = {rays.origins[tid][0], rays.origins[tid][1], rays.origins[tid][2]};
+    transform_coord<scalar_t>(origin, tree.offset, tree.scaling);
+    scalar_t dir[3] = {rays.dirs[tid][0], rays.dirs[tid][1], rays.dirs[tid][2]};
+    reweight_ray<scalar_t>(
+        tree,
+        SingleRaySpec<scalar_t>{origin, dir, &rays.vdirs[tid][0]},
+        opt,
+        error[tid]
+        );
+}
+
 
 template <typename scalar_t>
 __global__ void render_ray_backward_kernel(
@@ -1035,6 +1125,28 @@ torch::Tensor volume_render(TreeSpec& tree, RaysSpec& rays, RenderOptions& opt) 
     return result;
 }
 
+void reweight_rays(TreeSpec& tree, RaysSpec& rays, RenderOptions& opt, torch::Tensor error) {
+    tree.check();
+    rays.check();
+    // CHECK_INPUT(error);
+    // TORCH_CHECK(error.is_floating_point());
+    DEVICE_GUARD(tree.data);
+    const auto Q = rays.origins.size(0);
+    // TORCH_CHECK(Q == error.size(0));
+
+    auto_cuda_threads();
+    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
+    AT_DISPATCH_FLOATING_TYPES(rays.origins.type(), __FUNCTION__, [&] {
+            device::reweight_rays_kernel<scalar_t><<<blocks, cuda_n_threads>>>(
+                    tree, rays, opt, 
+                    error.packed_accessor32<scalar_t, 1, torch::RestrictPtrTraits>()
+                    );
+    });
+    CUDA_CHECK_ERRORS;
+}
+
+
+
 torch::Tensor volume_render_image(TreeSpec& tree, CameraSpec& cam, RenderOptions& opt) {
     tree.check();
     cam.check();
@@ -1196,3 +1308,4 @@ std::vector<torch::Tensor> grid_weight_render(
     CUDA_CHECK_ERRORS;
     return {grid_weight, grid_hit};
 }
+

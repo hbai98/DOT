@@ -57,6 +57,7 @@ struct RaysSpec {
         CHECK_INPUT(origins);
         CHECK_INPUT(dirs);
         CHECK_INPUT(vdirs);
+
         TORCH_CHECK(origins.is_floating_point());
         TORCH_CHECK(dirs.is_floating_point());
         TORCH_CHECK(vdirs.is_floating_point());

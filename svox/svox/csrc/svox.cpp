@@ -50,7 +50,7 @@ Tensor volume_render_image(TreeSpec&, CameraSpec&, RenderOptions&);
 Tensor volume_render_backward(TreeSpec&, RaysSpec&, RenderOptions&, Tensor);
 Tensor volume_render_image_backward(TreeSpec&, CameraSpec&, RenderOptions&,
                                     Tensor);
-Tensor reweight_rays(TreeSpec&, RaysSpec&, RenderOptions&, Tensor);
+void reweight_rays(TreeSpec&, RaysSpec&, RenderOptions&, Tensor);
             
 
 std::tuple<Tensor, Tensor, Tensor> se_grad(TreeSpec&, RaysSpec&, Tensor,

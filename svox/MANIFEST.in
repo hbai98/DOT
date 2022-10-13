@@ -15,4 +15,3 @@ include svox/csrc/svox.cpp
 include svox/csrc/svox_kernel.cu
 include svox/csrc/rt_kernel.cu
 include svox/csrc/quantizer.cpp
-include svox/csrc/rt_ext.cu
