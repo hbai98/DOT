@@ -14,7 +14,7 @@ module load cuda-11.4
 source activate
 conda activate Adnerf
 
-experiment_name=mcots/test/thresh_method/init_7
+experiment_name=mcots/test/thresh_method/init_7/weight_triangle_tol_0.01
 
 # config=opt/configs/syn_b1.json
 config=opt/configs/syn.json
