@@ -500,8 +500,6 @@ def train_step():
         # updata params
         s1 = torch.zeros_like(player.child, device=device,
                               dtype=player.data.dtype)  # E(x)
-        s2 = torch.zeros_like(player.child, device=device,
-                              dtype=player.data.dtype)  # E(x^2)
 
         for iter_id, batch_begin in enumerate(range(0, num_rays, batch_size)):
             gstep_id = iter_id + gstep_id_base
@@ -549,15 +547,9 @@ def train_step():
             with torch.no_grad():
                 dif = rgb_gt-rgb_pred
                 error = torch.exp(-args.mse_weights*(dif*dif).sum(-1))
-                print(b_rays.origins.shape)
-                print(error.mean())
-                print(error.max())
                 weight = mcot.reweight_rays(b_rays, error, render._get_options())
-                print(weight.shape)
-                assert 0
                 # weight = accum.value*torch.exp(-args.mse_weights*mse)
                 s1 += weight
-                s2 += weight*weight
             mcot.tree.data.grad.zero_()
 
             if args.use_sparsity_loss or args.use_tv_loss:
@@ -594,14 +586,9 @@ def train_step():
         pre_delta_mse = abs_dmse
 
         s1 /= rays_per_batch
-        s2 /= rays_per_batch
 
         # calculate val_weights
-        if args.use_variance:
-            var = torch.sqrt(s2-s1*s1)
-            VAL = var*args.var_weight+s1
-        else:
-            VAL = s1
+        VAL = s1
             
         val, leaves = prune_func(VAL)
         # to thrust sampling with refine_numb
