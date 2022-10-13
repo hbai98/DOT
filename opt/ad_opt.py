@@ -458,7 +458,6 @@ def prune_func(instant_weights, prune_tol_ratio):
 
         pre_sel = None
         print(f'Prunning at {thred}/{val.max()}')
-
         while True:
             sel = leaves[val < thred]
             nids, counts = torch.unique(sel[:, 0], return_counts=True)
@@ -527,8 +526,7 @@ def train_step():
             hessian_mse = hessian_func(gstep_id) * hessian_factor
             sampling_rate = sampling_rate_func(gstep_id) * sampling_factor
             prune_tol_ratio = prune_tol_func(gstep_id)
-            with player.accumulate_weights(op="sum") as accum:
-                rgb_pred = render.forward(b_rays, cuda=device == 'cuda')
+            rgb_pred = render.forward(b_rays, cuda=device == 'cuda')
             mse = F.mse_loss(rgb_gt, rgb_pred)
             loss = mse.unsqueeze(0)
 
