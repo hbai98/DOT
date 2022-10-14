@@ -14,5 +14,5 @@ module load cuda-11.4
 source activate
 conda activate Adnerf
 
-python autotune.py -g '0 1 5 7' tasks/eval.json
+python autotune.py -g '0 ' tasks/eval.json
 # python autotune.py  tasks/eval.json

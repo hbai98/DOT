@@ -145,14 +145,14 @@ class SMCT(N3Tree):
         #     # Potential OOM prevention hack
         #     # self.data = nn.Parameter(self.data.cpu())
         #     return False
-        nvmlInit()
-        h = nvmlDeviceGetHandleByIndex(0)
-        info = nvmlDeviceGetMemoryInfo(h)
-        need = sys.getsizeof(torch.zeros((cap_needed, *self.data.data.shape[1:]),
-                                                        dtype=self.data.dtype,).storage())
-        if info.free < need:
-            print('Memory runs out, and stop sampling.')
-            return False
+        # nvmlInit()
+        # h = nvmlDeviceGetHandleByIndex(0)
+        # info = nvmlDeviceGetMemoryInfo(h)
+        # need = sys.getsizeof(torch.zeros((cap_needed, *self.data.data.shape[1:]),
+        #                                                 dtype=self.data.dtype,).storage())
+        # if info.free < need:
+        #     print('Memory runs out, and stop sampling.')
+        #     return False
                 
         self.data = nn.Parameter(torch.cat((self.data.data,
                                             torch.zeros((cap_needed, *self.data.data.shape[1:]),

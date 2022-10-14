@@ -452,9 +452,9 @@ def prune_func(instant_weights, prune_tol_ratio):
         summary_writer.add_scalar(f'train/thred', thred, gstep_id)
         summary_writer.add_scalar(f'train/contrast_upperbound_for_thred', contrast, gstep_id)
 
-        if thred >= contrast:
-            print(f'thred:{thred}, goal:{contrast}')
-            return None, None
+        # if thred >= contrast:
+        #     print(f'thred:{thred}, goal:{contrast}')
+        #     return None, None
 
         pre_sel = None
         print(f'Prunning at {thred}/{val.max()}')
@@ -599,25 +599,13 @@ def train_step():
 
         # calculate val_weights
         VAL = s1
-        val, leaves = prune_func(VAL, prune_tol_ratio)
-        # to thrust sampling with refine_numb
-        if args.sample_after_prune:
-            if args.pruneSampleRepeats == 0:
-                print('Stabalize it...')
-            else:
-                print('Sample globally after prunning...')
-            mcot.tree.refine(repeats=args.pruneSampleRepeats)
-
-        if val is not None:
-            sel = leaves
-            prune = True
 
         sigma = mcot._sigma()
         if sigma.max().isinf():
             assert False, 'Inf density.'
         sigma = torch.nan_to_num(sigma, nan=0)
         summary_writer.add_histogram(f'train/sigma', sigma, gstep_id)
-
+        summary_writer.add_histogram(f'train/weight', VAL, gstep_id)
         summary_writer.add_scalar(
             f'train/num_nodes', player.n_leaves, gstep_id)
         summary_writer.add_scalar(f'train/depth', player.get_depth(), gstep_id)
@@ -658,7 +646,19 @@ def train_step():
     if args.policy == 'hybrid' and args.record_tree and epoch_id == args.hybrid_to_pareto:
         print('Change the policy on selection...')
         mcot.policy = 'pareto'
-            
+        
+    val, leaves = prune_func(VAL, prune_tol_ratio)
+    # to thrust sampling with refine_numb
+    if args.sample_after_prune:
+        if args.pruneSampleRepeats == 0:
+            print('Stabalize it...')
+        else:
+            print('Sample globally after prunning...')
+        mcot.tree.refine(repeats=args.pruneSampleRepeats)
+        
+    sel = leaves
+    if val is not None:
+        prune = True            
 
     continue_ = True
     if not prune:
