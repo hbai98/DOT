@@ -1,16 +1,16 @@
 {   
-    "lr_sigma": 8e-1,
+    "lr_sigma": 5e-1,
     "lr_sigma_final": 5e-4,
     "lr_sigma_decay_steps": 1e4,
     "lr_sigma_delay_steps": 2e2,
     "lr_sigma_delay_mult": 0.01,
-    "lr_sh": 4e-1,
+    "lr_sh": 1e-1,
     "lr_sh_final": 5e-4,
     "lr_sh_decay_steps": 1e4,
     "lr_sh_delay_steps": 0,
     "lr_sh_delay_mult": 0.01,
 
-    "prune_tol":0.1,
+    "prune_tol":0.2,
     "prune_tol_final":0.01,
     "prune_tol_decay_steps": 1e4,
     "prune_tol_delay_steps":0,
@@ -58,9 +58,6 @@
     "use_variance":false,
     "var_weight":1e0,
     "perm":true,
-
-    "log_weight":true,
-
     "policy":"greedy",
     "record_tree":false
 }
