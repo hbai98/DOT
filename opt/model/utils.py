@@ -4,7 +4,7 @@ import torch
 from typing import Optional
 import numpy as np
 from skimage.filters.thresholding import threshold_li, threshold_otsu, threshold_yen, threshold_minimum, threshold_triangle
-from skimage.filters._gaussian import gaussian
+
 
 
 class TreeConv(nn.Module):
@@ -69,10 +69,8 @@ def pareto_2d(data):
     return pareto_idx
 
 
-def threshold(data_, method, sigma=3):
-    data = data_.cpu().detach().numpy()
-    device = data_.device
-    data = gaussian(data, sigma=sigma)
+def threshold(data, method, sigma=3):
+    device = data.device
 
     if method == 'li':
         return torch.tensor(threshold_li(data), device=device)

@@ -20,6 +20,7 @@ from util.util import get_expon_lr_func
 from util import adConfig
 from datetime import datetime
 import torch.nn.functional as F
+from skimage.filters._gaussian import gaussian
 from torch.utils.tensorboard import SummaryWriter
 
 from tqdm import tqdm
@@ -171,6 +172,9 @@ group.add_argument('--init_weight_tv_sigma_loss',
 group.add_argument('--init_weight_tv_color_loss',
                    type=float,
                    default=None)
+group.add_argument('--tv_thred',
+                   type=float,
+                   default=1e-2)
 
 group.add_argument('--policy',
                    choices=['pareto', 'greedy', 'hybrid'],
@@ -420,9 +424,7 @@ def update_val_leaves(instant_weights):
     if args.thresh_type == 'weight':
         val = instant_weights[(*leaves.long().T, )]
     elif args.thresh_type == 'sigma':
-        val_ = mcot.tree.data[(*leaves.long().T, )][..., -1]
-        if args.density_softplus:
-            val = _SOFTPLUS_M1(val_)
+        val = mcot.tree.data[(*leaves.long().T, )][..., -1]
     val = torch.nan_to_num(val, nan=0)
     return val, leaves
 
@@ -435,24 +437,22 @@ def prune_func(instant_weights):
 
         if args.thresh_type == 'sigma':
             val = mcot.tree.data[sel][..., -1]
-            if args.density_softplus:
-                val = _SOFTPLUS_M1(val)
         elif args.thresh_type == 'num_visits':
             assert args.record_tree, 'Pruning by num_visits is only accessible when record_tree option is true.'
         elif args.thresh_type == 'weight':
             val = instant_weights[sel]
 
         val = torch.nan_to_num(val, nan=0)
-
+        smoothed = gaussian(val.cpu().detach().numpy(), sigma=args.thresh_gaussian_sigma)        
         if args.thresh_method == 'constant':
             thred = args.thresh_val
         else:
-            thred = threshold(val, args.thresh_method, args.thresh_gaussian_sigma)
+            thred = threshold(val, args.thresh_method)
             # thred = min(thred, args.prune_max)
         if thred is None:
             assert False, 'Threshold is wrong.'
-        s1 = val[val>thred]
-        s2 = val[val<=thred]
+        s1 = val[smoothed>thred]
+        s2 = val[smoothed<=thred]
         count = 0
         flag = False
         while True:
@@ -476,17 +476,16 @@ def prune_func(instant_weights):
                 flag=True
                 break
         
-        # upper = (val.max()-val.min())*prune_tol_ratio
-        # summary_writer.add_scalar(f'train/morethanZ_score_to_prune', upper, gstep_id)
         summary_writer.add_scalar(f'train/kld', kld, gstep_id)
         if not flag:
-            return None, None
+            return None, None, None
 
         pre_sel = None
         toltal = 0 
         print(f'Prunning at {thred}/{val.max()}')
         while True:
-            sel = leaves[val < thred]
+            smoothed = gaussian(val.cpu().detach().numpy(), sigma=args.thresh_gaussian_sigma)   
+            sel = leaves[smoothed < thred]
             nids, counts = torch.unique(sel[:, 0], return_counts=True)
             # discover the fronts whose all children are included in sel
             mask = (counts >= int(mcot.tree.N**3*args.thresh_tol)).numpy()
@@ -511,7 +510,7 @@ def prune_func(instant_weights):
             val, leaves = update_val_leaves(instant_weights)
 
         summary_writer.add_scalar(f'train/number_prune', toltal, gstep_id)
-        return val, leaves
+        return val, leaves, toltal
 
 
 def train_step():
@@ -525,8 +524,12 @@ def train_step():
     batch_size = dset.h*dset.w*args.batch_size
     num_rays = dset.rays.origins.size(0)
     rays_per_batch = (num_rays-1)//batch_size+1
+    pre_prune = 0
     pre_kld = 0
+    prune_delta = torch.inf
     prune = False
+
+    
     # stimulate
     while True:
         # important to make the learned properties stable.
@@ -567,17 +570,19 @@ def train_step():
             #     loss_sparsity = mcot._w_sparsity*torch.log(1+2*sigma*sigma).mean()
             #     loss += loss_sparsity
 
-            # if args.use_tv_loss:
-            #     sel = mcot.tree._frontier
-            #     color = mcot.tree.data[sel][..., :-1]
-            #     sigma = mcot.tree.data[sel][..., -1]
-            #     if args.density_softplus:
-            #         sigma = _SOFTPLUS_M1(sigma)
-            #     color = rearrange(color, 'n x y z d -> (n d) (x y z)')
-            #     sigma = rearrange(sigma, 'n x y z -> n (x y z)')
-            #     loss_tv =  mcot._w_color_tv*torch.var(color, dim=-1).mean()+\
-            #         mcot._w_sigma_tv*torch.var(sigma, dim=-1).mean()
-            #     loss += loss_tv
+            if args.use_tv_loss:
+                sel = mcot.tree._frontier
+                sel = np.random.choice(sel, args.tv_thred*sel.size(0))
+                depths = mcot.tree.parent_depth[sel]
+                color = mcot.tree.data[sel][..., :-1]*depths
+                sigma = mcot.tree.data[sel][..., -1]*depths
+                # if args.density_softplus:
+                #     sigma = _SOFTPLUS_M1(sigma)
+                color = rearrange(color, 'n x y z d -> (n d) (x y z)')
+                sigma = rearrange(sigma, 'n x y z -> n (x y z)')
+                loss_tv =  mcot._w_color_tv*torch.sqrt(torch.var(color, dim=-1)).mean()+\
+                    mcot._w_sigma_tv*torch.sqrt(torch.var(sigma, dim=-1)).mean()
+                loss += loss_tv
 
             loss.backward()
             mcot.optim_basis_all_step(
@@ -638,7 +643,10 @@ def train_step():
         VAL = s1
         
         if not prune:
-            val, leaves = prune_func(VAL)
+            val, leaves, prune_num = prune_func(VAL)
+            if prune_num is not None:
+                prune_delta = np.abs(pre_prune-prune_num)
+                pre_prune = prune_num
         # to thrust sampling with refine_numb
             if args.sample_after_prune:
                 if args.pruneSampleRepeats == 0:
@@ -717,6 +725,15 @@ def train_step():
     summary_writer.add_scalar(f'train/num_nodes', player.n_leaves, gstep_id)
     summary_writer.add_scalar(f'train/depth', player.get_depth(), gstep_id)
 
+    
+    # prune check
+    var = prune_delta/mcot.tree.n_leaves
+    if var < args.z_score_thred:
+        print(f'The tree becomes stable with nodes number variance {var} less than {args.z_score_thred}. Stop optimization.')
+        eval_step()
+        continue_ = False
+
+    
     return continue_
 
 
@@ -730,7 +747,6 @@ with tqdm(total=args.depth_limit) as pbar:
         player = mcot.tree
         # render = mcot._volumeRenderer(dset.ndc_coeffs)
         render = mcot._volumeRenderer()
-
         depth = player.get_depth()
 
         # eval_step()
