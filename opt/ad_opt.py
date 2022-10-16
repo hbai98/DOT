@@ -19,6 +19,7 @@ from util.dataset import datasets
 from util.util import get_expon_lr_func
 from util import adConfig
 from datetime import datetime
+import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 
 from tqdm import tqdm
@@ -67,7 +68,8 @@ group.add_argument('--mse_weights', type=float,
                    )
 group.add_argument('--hessian_tolerance', type=int, default=5,
                    help="the limit number of counter for hessian mse check")
-
+group.add_argument('--prune_tolerance', type=int, default=5,
+                   help="the limit number of counter for hessian mse check")
 group.add_argument('--sampling_rate', type=float,
                    default=1e-1, help='Sampling on child nodes.')
 group.add_argument('--sampling_rate_final', type=float, default=3e-1)
@@ -77,15 +79,15 @@ group.add_argument('--sampling_rate_delay_steps', type=int, default=0,
 group.add_argument('--sampling_rate_delay_mult',
                    type=float, default=1e-2)  # 1e-4)#1e-4)
 
-group.add_argument('--prune_tol', type=float,
-                   default=1e-2, help='Sampling on child nodes.')
-group.add_argument('--prune_tol_final', type=float, default=3e-1)
-group.add_argument('--prune_tol_decay_steps', type=int, default=250000)
-group.add_argument('--prune_tol_delay_steps', type=int, default=0,
-                   help="Reverse cosine steps (0 means disable)")
-group.add_argument('--prune_tol_delay_mult',
-                   type=float, default=1e-2)  # 1e-4)#1e-4)
-
+# group.add_argument('--prune_tol', type=float,
+#                    default=1e-2, help='Sampling on child nodes.')
+# group.add_argument('--prune_tol_final', type=float, default=3e-1)
+# group.add_argument('--prune_tol_decay_steps', type=int, default=250000)
+# group.add_argument('--prune_tol_delay_steps', type=int, default=0,
+#                    help="Reverse cosine steps (0 means disable)")
+# group.add_argument('--prune_tol_delay_mult',
+#                    type=float, default=1e-2)  # 1e-4)#1e-4)
+group.add_argument('--z_score_thred', type=float, default=1e-2)
 
 group.add_argument('--repeats', type=int, default=2)
 group.add_argument('--pruneSampleRepeats', type=int, default=1)
@@ -310,8 +312,8 @@ hessian_func = get_expon_lr_func(args.hessian_mse, args.hessian_mse_final, args.
 sampling_rate_func = get_expon_lr_func(args.sampling_rate, args.sampling_rate_final, args.sampling_rate_delay_steps,
                                        args.sampling_rate_delay_mult, args.sampling_rate_decay_steps)
 
-prune_tol_func = get_expon_lr_func(args.prune_tol, args.prune_tol_final, args.prune_tol_delay_steps,
-                                       args.prune_tol_delay_mult, args.prune_tol_decay_steps)
+# prune_tol_func = get_expon_lr_func(args.prune_tol, args.prune_tol_final, args.prune_tol_delay_steps,
+#                                        args.prune_tol_delay_mult, args.prune_tol_decay_steps)
 
 global delta_depth
 
@@ -425,7 +427,8 @@ def update_val_leaves(instant_weights):
     return val, leaves
 
 
-def prune_func(instant_weights, prune_tol_ratio):
+def prune_func(instant_weights):
+    global pre_kld
     with torch.no_grad():
         leaves = mcot.tree._all_leaves()
         sel = (*leaves.long().T, )
@@ -448,12 +451,35 @@ def prune_func(instant_weights, prune_tol_ratio):
             # thred = min(thred, args.prune_max)
         if thred is None:
             assert False, 'Threshold is wrong.'
-        contrast = (val[val>thred].mean()-val[val<=thred].mean())*prune_tol_ratio
-        summary_writer.add_scalar(f'train/thred', thred, gstep_id)
-        summary_writer.add_scalar(f'train/contrast_upperbound_for_thred', contrast, gstep_id)
-
-        if thred >= contrast:
-            print(f'thred:{thred}, goal:{contrast}')
+        s1 = val[val>thred]
+        s2 = val[val<=thred]
+        count = 0
+        flag = False
+        while True:
+            if len(s1) > len(s2):
+                sel = torch.randperm(len(s2))
+                s1 = s1[sel]
+            else:
+                sel = torch.randperm(len(s1))
+                s2 = s2[sel]   
+            kld = F.kl_div(s1, s2, reduction='batchmean')
+            dif = torch.abs(kld-pre_kld)
+            
+            if count!= 0 and dif >= args.z_score_thred:
+                pre_kld = kld
+                break
+            else:
+                count+=1
+                
+            if count >= args.prune_tolerance:
+                pre_kld = kld
+                flag=True
+                break
+        
+        # upper = (val.max()-val.min())*prune_tol_ratio
+        # summary_writer.add_scalar(f'train/morethanZ_score_to_prune', upper, gstep_id)
+        summary_writer.add_scalar(f'train/kld', kld, gstep_id)
+        if not flag:
             return None, None
 
         pre_sel = None
@@ -489,7 +515,7 @@ def prune_func(instant_weights, prune_tol_ratio):
 
 
 def train_step():
-    global gstep_id, gstep_id_base, delta_depth, thred
+    global gstep_id, gstep_id_base, delta_depth, thred, pre_kld
 
     print('Train step')
     stats = {"mse": 0.0, "psnr": 0.0, "invsqr_mse": 0.0}
@@ -499,7 +525,7 @@ def train_step():
     batch_size = dset.h*dset.w*args.batch_size
     num_rays = dset.rays.origins.size(0)
     rays_per_batch = (num_rays-1)//batch_size+1
-
+    pre_kld = 0
     prune = False
     # stimulate
     while True:
@@ -529,29 +555,29 @@ def train_step():
             lr_sh = lr_sh_func(gstep_id) * lr_sh_factor
             hessian_mse = hessian_func(gstep_id) * hessian_factor
             sampling_rate = sampling_rate_func(gstep_id) * sampling_factor
-            prune_tol_ratio = prune_tol_func(gstep_id)
+            # prune_tol_ratio = prune_tol_func(gstep_id)
             rgb_pred = render.forward(b_rays, cuda=device == 'cuda')
             mse = F.mse_loss(rgb_gt, rgb_pred)
             loss = mse.unsqueeze(0)
 
-            if args.use_sparsity_loss:
-                sigma = mcot._sigma()
-                # loss_sparsity = torch.abs(mcot.w_sparsity)*torch.abs(1-args.sparse_weight*torch.exp(-sigma)).mean()
-                # Cauchy version (from SNeRG)
-                loss_sparsity = mcot._w_sparsity*torch.log(1+2*sigma*sigma).mean()
-                loss += loss_sparsity
+            # if args.use_sparsity_loss:
+            #     sigma = mcot._sigma()
+            #     # loss_sparsity = torch.abs(mcot.w_sparsity)*torch.abs(1-args.sparse_weight*torch.exp(-sigma)).mean()
+            #     # Cauchy version (from SNeRG)
+            #     loss_sparsity = mcot._w_sparsity*torch.log(1+2*sigma*sigma).mean()
+            #     loss += loss_sparsity
 
-            if args.use_tv_loss:
-                sel = mcot.tree._frontier
-                color = mcot.tree.data[sel][..., :-1]
-                sigma = mcot.tree.data[sel][..., -1]
-                if args.density_softplus:
-                    sigma = _SOFTPLUS_M1(sigma)
-                color = rearrange(color, 'n x y z d -> (n d) (x y z)')
-                sigma = rearrange(sigma, 'n x y z -> n (x y z)')
-                loss_tv =  mcot._w_color_tv*torch.var(color, dim=-1).mean()+\
-                    mcot._w_sigma_tv*torch.var(sigma, dim=-1).mean()
-                loss += loss_tv
+            # if args.use_tv_loss:
+            #     sel = mcot.tree._frontier
+            #     color = mcot.tree.data[sel][..., :-1]
+            #     sigma = mcot.tree.data[sel][..., -1]
+            #     if args.density_softplus:
+            #         sigma = _SOFTPLUS_M1(sigma)
+            #     color = rearrange(color, 'n x y z d -> (n d) (x y z)')
+            #     sigma = rearrange(sigma, 'n x y z -> n (x y z)')
+            #     loss_tv =  mcot._w_color_tv*torch.var(color, dim=-1).mean()+\
+            #         mcot._w_sigma_tv*torch.var(sigma, dim=-1).mean()
+            #     loss += loss_tv
 
             loss.backward()
             mcot.optim_basis_all_step(
@@ -566,6 +592,13 @@ def train_step():
                 s1 += weight
             mcot.tree.data.grad.zero_()
 
+            # val, leaves = update_val_leaves(s1)
+            # sample_k = int(max(1, player.n_leaves*sampling_rate))
+            # idxs = mcot.select(sample_k, val, leaves)
+            # interval = idxs.size(0)/args.repeats
+            # print(interval)
+            # assert 0
+            
             if args.use_sparsity_loss or args.use_tv_loss:
                 optim.step()
                 optim.zero_grad()
@@ -580,17 +613,17 @@ def train_step():
             stats['psnr'] += psnr
             stats['invsqr_mse'] += 1.0 / mse_num ** 2
             
-            if args.use_sparsity_loss:
-                summary_writer.add_scalar(
-                    "train/w_sparsity", mcot._w_sparsity, global_step=gstep_id
-                )
-            if args.use_tv_loss:
-                summary_writer.add_scalar(
-                    "train/w_tv_color",  mcot._w_color_tv, global_step=gstep_id
-                )         
-                summary_writer.add_scalar(
-                    "train/w_tv_sigma", mcot._w_sigma_tv, global_step=gstep_id
-                )      
+            # if args.use_sparsity_loss:
+            #     summary_writer.add_scalar(
+            #         "train/w_sparsity", mcot._w_sparsity, global_step=gstep_id
+            #     )
+            # if args.use_tv_loss:
+            #     summary_writer.add_scalar(
+            #         "train/w_tv_color",  mcot._w_color_tv, global_step=gstep_id
+            #     )         
+            #     summary_writer.add_scalar(
+            #         "train/w_tv_sigma", mcot._w_sigma_tv, global_step=gstep_id
+            #     )      
                 
         # check if the model gets stable by hessian mse
         delta_mse = stats['mse']-pre_mse
@@ -603,25 +636,25 @@ def train_step():
 
         # calculate val_weights
         VAL = s1
+        
         if not prune:
-            val, leaves = prune_func(VAL, prune_tol_ratio)
-            # to thrust sampling with refine_numb
+            val, leaves = prune_func(VAL)
+        # to thrust sampling with refine_numb
             if args.sample_after_prune:
                 if args.pruneSampleRepeats == 0:
                     print('Stabalize it...')
                 else:
                     print('Sample globally after prunning...')
                 mcot.tree.refine(repeats=args.pruneSampleRepeats)
-                
-            sel = leaves
-            if val is not None:
-                prune = True   
             
-        sigma = mcot._sigma()
-        if sigma.max().isinf():
-            assert False, 'Inf density.'
-        sigma = torch.nan_to_num(sigma, nan=0)
-        summary_writer.add_histogram(f'train/sigma', sigma, gstep_id)
+        if val is not None:
+            prune = True   
+            
+        # sigma = mcot._sigma()
+        # if sigma.max().isinf():
+        #     assert False, 'Inf density.'
+        # sigma = torch.nan_to_num(sigma, nan=0)
+        # summary_writer.add_histogram(f'train/sigma', sigma, gstep_id)
         summary_writer.add_histogram(f'train/weight', VAL, gstep_id)
         summary_writer.add_scalar(
             f'train/num_nodes', player.n_leaves, gstep_id)
@@ -674,7 +707,12 @@ def train_step():
         # print(f'{idxs.size(0)}/{sample_k}')
         if args.record_tree:
             mcot.backtrace(val, leaves)
-        continue_ = mcot.expand(idxs, args.repeats)
+        interval = idxs.size(0)//args.repeats
+        for i in range(1, args.repeats+1):
+            start = (i-1)*interval
+            end = i*interval
+            sel = idxs[start:end]
+            continue_ = mcot.expand(sel, i)
 
     summary_writer.add_scalar(f'train/num_nodes', player.n_leaves, gstep_id)
     summary_writer.add_scalar(f'train/depth', player.get_depth(), gstep_id)
