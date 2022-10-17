@@ -26,3 +26,6 @@ echo LOGFILE $NOHUP_FILE
 python -u opt/opt.py -t $CKPT_DIR ${data_dir} > $NOHUP_FILE 2>&1 
 echo DETACH
 ```
+
+
+cmake .. -G "Visual Studio 17 2022" -DCMAKE_CUDA_ARCHITECTURES=all.

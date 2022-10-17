@@ -71,6 +71,7 @@ group.add_argument('--hessian_tolerance', type=int, default=5,
                    help="the limit number of counter for hessian mse check")
 group.add_argument('--prune_tolerance', type=int, default=5,
                    help="the limit number of counter for hessian mse check")
+group.add_argument('--prune_node_var_thred', type=float, default=1e-3)
 group.add_argument('--sampling_rate', type=float,
                    default=1e-1, help='Sampling on child nodes.')
 group.add_argument('--sampling_rate_final', type=float, default=3e-1)
@@ -572,16 +573,15 @@ def train_step():
 
             if args.use_tv_loss:
                 sel = mcot.tree._frontier
-                sel = np.random.choice(sel, args.tv_thred*sel.size(0))
-                depths = mcot.tree.parent_depth[sel]
-                color = mcot.tree.data[sel][..., :-1]*depths
-                sigma = mcot.tree.data[sel][..., -1]*depths
-                # if args.density_softplus:
-                #     sigma = _SOFTPLUS_M1(sigma)
+                sel = np.random.choice(sel.cpu().numpy(), int(args.tv_thred*sel.size(0)))
+                depths = mcot.tree.parent_depth[sel, 1]
+                # color = mcot.tree.data[sel][..., :-1]*depths[]
+                sigma = mcot.tree.data[sel][..., -1]
                 color = rearrange(color, 'n x y z d -> (n d) (x y z)')
                 sigma = rearrange(sigma, 'n x y z -> n (x y z)')
-                loss_tv =  mcot._w_color_tv*torch.sqrt(torch.var(color, dim=-1)).mean()+\
-                    mcot._w_sigma_tv*torch.sqrt(torch.var(sigma, dim=-1)).mean()
+                
+                loss_tv =  mcot._w_color_tv*torch.std(color, dim=-1).mean()+\
+                    mcot._w_sigma_tv*torch.std(sigma, dim=-1).mean()
                 loss += loss_tv
 
             loss.backward()
@@ -618,17 +618,17 @@ def train_step():
             stats['psnr'] += psnr
             stats['invsqr_mse'] += 1.0 / mse_num ** 2
             
-            # if args.use_sparsity_loss:
-            #     summary_writer.add_scalar(
-            #         "train/w_sparsity", mcot._w_sparsity, global_step=gstep_id
-            #     )
-            # if args.use_tv_loss:
-            #     summary_writer.add_scalar(
-            #         "train/w_tv_color",  mcot._w_color_tv, global_step=gstep_id
-            #     )         
-            #     summary_writer.add_scalar(
-            #         "train/w_tv_sigma", mcot._w_sigma_tv, global_step=gstep_id
-            #     )      
+            if args.use_sparsity_loss:
+                summary_writer.add_scalar(
+                    "train/w_sparsity", mcot._w_sparsity, global_step=gstep_id
+                )
+            if args.use_tv_loss:
+                summary_writer.add_scalar(
+                    "train/w_tv_color",  mcot._w_color_tv, global_step=gstep_id
+                )         
+                summary_writer.add_scalar(
+                    "train/w_tv_sigma", mcot._w_sigma_tv, global_step=gstep_id
+                )      
                 
         # check if the model gets stable by hessian mse
         delta_mse = stats['mse']-pre_mse
@@ -728,8 +728,8 @@ def train_step():
     
     # prune check
     var = prune_delta/mcot.tree.n_leaves
-    if var < args.z_score_thred:
-        print(f'The tree becomes stable with nodes number variance {var} less than {args.z_score_thred}. Stop optimization.')
+    if var < args.prune_node_var_thred:
+        print(f'The tree becomes stable with nodes number variance {var} less than {args.prune_node_var_thred}. Stop optimization.')
         eval_step()
         continue_ = False
 
