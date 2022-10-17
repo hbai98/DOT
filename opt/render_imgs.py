@@ -88,7 +88,7 @@ if not args.no_lpips:
     import lpips
     lpips_vgg = lpips.LPIPS(net="vgg").eval().to(device)
 if not path.isfile(args.ckpt):
-    args.ckpt = path.join(args.ckpt, 'ckpt.npz')
+    args.ckpt = path.join(args.ckpt, 'ckpt_best.npz')
 
 render_dir = path.join(path.dirname(args.ckpt),
                        'train_renders' if args.train else 'test_renders')
