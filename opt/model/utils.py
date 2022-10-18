@@ -3,9 +3,24 @@ import torch.nn as nn
 import torch
 from typing import Optional
 import numpy as np
+from skimage.filters._gaussian import gaussian
 from skimage.filters.thresholding import threshold_li, threshold_otsu, threshold_yen, threshold_minimum, threshold_triangle
+from sklearn import metrics
 
-
+def mmd_rbf(X, Y, gamma=1.0):
+    """MMD using rbf (gaussian) kernel (i.e., k(x,y) = exp(-gamma * ||x-y||^2 / 2))
+    Arguments:
+        X {[n_sample1, dim]} -- [X matrix]
+        Y {[n_sample2, dim]} -- [Y matrix]
+    Keyword Arguments:
+        gamma {float} -- [kernel parameter] (default: {1.0})
+    Returns:
+        [scalar] -- [MMD value]
+    """
+    XX = metrics.pairwise.rbf_kernel(X, X, gamma)
+    YY = metrics.pairwise.rbf_kernel(Y, Y, gamma)
+    XY = metrics.pairwise.rbf_kernel(X, Y, gamma)
+    return XX.mean() + YY.mean() - 2 * XY.mean()
 
 class TreeConv(nn.Module):
     def __init__(self, in_channels, out_channels, degree, act='gelu', inplace=True):
@@ -71,7 +86,7 @@ def pareto_2d(data):
 
 def threshold(data, method, sigma=3):
     device = data.device
-
+    data = gaussian(data.cpu().detach().numpy(), sigma=sigma)
     if method == 'li':
         return torch.tensor(threshold_li(data), device=device)
     elif method == 'otsu':

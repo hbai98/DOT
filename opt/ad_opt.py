@@ -14,14 +14,15 @@ import numpy as np
 import math
 import argparse
 from model.mcot import MCOT
-from model.utils import _SOFTPLUS_M1, threshold
+from model.utils import _SOFTPLUS_M1, threshold, mmd_rbf
 from util.dataset import datasets
 from util.util import get_expon_lr_func
 from util import adConfig
 from datetime import datetime
 import torch.nn.functional as F
-from skimage.filters._gaussian import gaussian
+
 from torch.utils.tensorboard import SummaryWriter
+
 
 from tqdm import tqdm
 import os
@@ -45,6 +46,7 @@ group.add_argument('--batch_size', type=int, default=5,
                    # 100000,
                    #  2000,
                    help='batch size')
+group.add_argument('--rays_with_replacement', type=bool, default=True)
 group.add_argument(
     '--sigma_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Density optimizer")
 group.add_argument('--lr_sigma', type=float, default=1e-1,
@@ -89,7 +91,7 @@ group.add_argument('--sampling_rate_delay_mult',
 #                    help="Reverse cosine steps (0 means disable)")
 # group.add_argument('--prune_tol_delay_mult',
 #                    type=float, default=1e-2)  # 1e-4)#1e-4)
-group.add_argument('--z_score_thred', type=float, default=1e-2)
+group.add_argument('--distance_thred', type=float, default=1e-2)
 
 group.add_argument('--repeats', type=int, default=2)
 group.add_argument('--pruneSampleRepeats', type=int, default=1)
@@ -431,7 +433,7 @@ def update_val_leaves(instant_weights):
 
 
 def prune_func(instant_weights):
-    global pre_kld
+    global pre_distance, distance_thred_count
     with torch.no_grad():
         leaves = mcot.tree._all_leaves()
         sel = (*leaves.long().T, )
@@ -444,49 +446,39 @@ def prune_func(instant_weights):
             val = instant_weights[sel]
 
         val = torch.nan_to_num(val, nan=0)
-        smoothed = gaussian(val.cpu().detach().numpy(), sigma=args.thresh_gaussian_sigma)        
+        # smoothed =         
         if args.thresh_method == 'constant':
             thred = args.thresh_val
         else:
-            thred = threshold(val, args.thresh_method)
+            thred = threshold(val, args.thresh_method, args.thresh_gaussian_sigma)
             # thred = min(thred, args.prune_max)
         if thred is None:
             assert False, 'Threshold is wrong.'
-        s1 = val[smoothed>thred]
-        s2 = val[smoothed<=thred]
-        count = 0
-        flag = False
-        while True:
-            if len(s1) > len(s2):
-                sel = torch.randperm(len(s2))
-                s1 = s1[sel]
-            else:
-                sel = torch.randperm(len(s1))
-                s2 = s2[sel]   
-            kld = F.kl_div(s1, s2, reduction='batchmean')
-            dif = torch.abs(kld-pre_kld)
-            
-            if count!= 0 and dif >= args.z_score_thred:
-                pre_kld = kld
-                break
-            else:
-                count+=1
-                
-            if count >= args.prune_tolerance:
-                pre_kld = kld
-                flag=True
-                break
+        s1 = val[val>thred]
+        s2 = val[val<=thred]
         
-        summary_writer.add_scalar(f'train/kld', kld, gstep_id)
-        if not flag:
+        
+        distance = torch.abs(s1.mean()-s2.mean())/torch.sqrt(s1.var()+s2.var())
+        dif = torch.abs(distance-pre_distance)
+        pre_distance = distance
+        summary_writer.add_scalar(f'train/d_delta', dif, gstep_id)
+        
+        if dif >= args.distance_thred:
+            distance_thred_count=0
             return None, None, None
-
+        else:
+            distance_thred_count+=1
+            
+        if distance_thred_count < args.prune_tolerance:
+            return None, None, None
+            
+        
         pre_sel = None
         toltal = 0 
         print(f'Prunning at {thred}/{val.max()}')
         while True:
-            smoothed = gaussian(val.cpu().detach().numpy(), sigma=args.thresh_gaussian_sigma)   
-            sel = leaves[smoothed < thred]
+            # smoothed = gaussian(val.cpu().detach().numpy(), sigma=args.thresh_gaussian_sigma)   
+            sel = leaves[val < thred]
             nids, counts = torch.unique(sel[:, 0], return_counts=True)
             # discover the fronts whose all children are included in sel
             mask = (counts >= int(mcot.tree.N**3*args.thresh_tol)).numpy()
@@ -515,18 +507,19 @@ def prune_func(instant_weights):
 
 
 def train_step():
-    global gstep_id, gstep_id_base, delta_depth, thred, pre_kld
+    global gstep_id, gstep_id_base, delta_depth, thred, pre_distance, distance_thred_count
 
     print('Train step')
     stats = {"mse": 0.0, "psnr": 0.0, "invsqr_mse": 0.0}
     pre_delta_mse = 0
     pre_mse = 0
     counter = 0
-    batch_size = dset.h*dset.w*args.batch_size
+    batch_size = int(dset.h*dset.w*args.batch_size)
     num_rays = dset.rays.origins.size(0)
     rays_per_batch = (num_rays-1)//batch_size+1
     pre_prune = 0
-    pre_kld = 0
+    pre_distance = 0
+    distance_thred_count = 0
     prune_delta = torch.inf
     prune = False
 
@@ -535,7 +528,10 @@ def train_step():
     while True:
         # important to make the learned properties stable.
         # dset.shuffle_rays()
-        indexer = torch.randperm(dset.rays.origins.size(0))
+        if args.rays_with_replacement:
+            indexer = torch.randint(dset.rays.origins.size(0), (dset.rays.origins.size(0),))
+        else:
+            indexer = torch.randperm(dset.rays.origins.size(0))
         norms = np.linalg.norm(dset.rays.dirs, axis=-1, keepdims=True)
         viewdirs = dset.rays.dirs / norms
         rays = svox.Rays(dset.rays.origins[indexer],
@@ -637,7 +633,7 @@ def train_step():
         pre_mse = stats['mse']
         pre_delta_mse = abs_dmse
 
-        s1 /= rays_per_batch
+        # s1 /= rays_per_batch
 
         # calculate val_weights
         VAL = s1
@@ -682,10 +678,12 @@ def train_step():
             summary_writer.add_scalar(f'train/{stat_name}', stat_val, gstep_id)
             stats[stat_name] = 0
 
-        if _hessian_mse < hessian_mse:
+        if _hessian_mse <= hessian_mse:
             counter += 1
             if counter > args.hessian_tolerance:
                 break
+        else:
+            counter = 0
 
         gstep_id_base += rays_per_batch
 
@@ -728,7 +726,7 @@ def train_step():
     
     # prune check
     var = prune_delta/mcot.tree.n_leaves
-    if var < args.prune_node_var_thred:
+    if prune_delta!=0 and var < args.prune_node_var_thred:
         print(f'The tree becomes stable with nodes number variance {var} less than {args.prune_node_var_thred}. Stop optimization.')
         eval_step()
         continue_ = False
@@ -750,6 +748,7 @@ with tqdm(total=args.depth_limit) as pbar:
         depth = player.get_depth()
 
         # eval_step()
+        
         flag = train_step()
         delta_depth = (player.get_depth()-depth).item()
 

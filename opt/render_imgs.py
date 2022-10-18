@@ -115,28 +115,28 @@ tree = svox.N3Tree.load(args.ckpt, device=device)
 render = svox.VolumeRenderer(
     tree, step_size=1e-5, density_softplus=True, ndc=dset.ndc_coeffs)
 
-if tree.use_background:
-    if args.nobg:
-        #  grid.background_cubemap.data = grid.background_cubemap.data.cuda()
-        tree.background_data.data[..., -1] = 0.0
-        render_dir += '_nobg'
-    if args.nofg:
-        tree.density_data.data[:] = 0.0
-        #  grid.sh_data.data[..., 0] = 1.0 / svox2.utils.SH_C0
-        #  grid.sh_data.data[..., 9] = 1.0 / svox2.utils.SH_C0
-        #  grid.sh_data.data[..., 18] = 1.0 / svox2.utils.SH_C0
-        render_dir += '_nofg'
+# if tree.use_background:
+#     if args.nobg:
+#         #  grid.background_cubemap.data = grid.background_cubemap.data.cuda()
+#         tree.background_data.data[..., -1] = 0.0
+#         render_dir += '_nobg'
+#     if args.nofg:
+#         tree.density_data.data[:] = 0.0
+#         #  grid.sh_data.data[..., 0] = 1.0 / svox2.utils.SH_C0
+#         #  grid.sh_data.data[..., 9] = 1.0 / svox2.utils.SH_C0
+#         #  grid.sh_data.data[..., 18] = 1.0 / svox2.utils.SH_C0
+#         render_dir += '_nofg'
 
-    # DEBUG
-    #  grid.links.data[grid.links.size(0)//2:] = -1
-    #  render_dir += "_chopx2"
+#     # DEBUG
+#     #  grid.links.data[grid.links.size(0)//2:] = -1
+#     #  render_dir += "_chopx2"
+# opt = render._get_options()
+# config_util.setup_render_opts(opt, args)
 
-config_util.setup_render_opts(tree.opt, args)
-
-if args.blackbg:
-    print('Forcing black bg')
-    render_dir += '_blackbg'
-    tree.opt.background_brightness = 0.0
+# if args.blackbg:
+#     print('Forcing black bg')
+#     render_dir += '_blackbg'
+#     tree.opt.background_brightness = 0.0
 
 print('Writing to', render_dir)
 os.makedirs(render_dir, exist_ok=True)
@@ -190,7 +190,7 @@ with torch.no_grad():
                                  height=h,
                                  fx=dset.intrins.get(
                                      'fx', img_id),
-                                 fy=dset.intrins.get('fy', img_id),).clamp_(0.0, 1.0)
+                                 fy=dset.intrins.get('fy', img_id), ).clamp_(0.0, 1.0)
         if args.ray_len:
             minv, meanv, maxv = im.min().item(), im.mean().item(), im.max().item()
             im = viridis_cmap(im.cpu().numpy())
