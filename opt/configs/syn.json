@@ -34,7 +34,7 @@
     "rms_beta":0.95,
   
     "hessian_mse":5e-4,
-    "hessian_mse_final":5e-6,
+    "hessian_mse_final":5e-5,
     "hessian_mse_delay_steps": 0,
     "hessian_mse_decay_steps":2e3,
 

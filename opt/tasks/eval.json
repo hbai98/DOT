@@ -1,7 +1,7 @@
 {
     "eval": true,
     "data_root": "/hy-tmp/nerf_synthetic",
-    "train_root": "/hy-tmp/syn/test_wet",
+    "train_root": "/hy-tmp/syn/test_contrast",
     "variables": {
         "scene": ["lego", "mic", "ship", "chair", "ficus", "materials", "drums", "hotdog"]
     },
@@ -11,3 +11,4 @@
         "config": "configs/syn.json"
     }]
 }
+ 
