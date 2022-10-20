@@ -522,6 +522,7 @@ def train_step():
     distance_thred_count = 0
     prune_delta = torch.inf
     prune = False
+
     # stimulate
     while True:
         # important to make the learned properties stable.
@@ -536,8 +537,7 @@ def train_step():
                          dset.rays.dirs[indexer], viewdirs[indexer])
         gt = dset.rays.gt[indexer]
         # updata params
-        postier_weight = torch.zeros_like(player.child, device=device,
-                              dtype=player.data.dtype)  # E(x)
+        s1 = torch.zeros_like(player.child, device=device,dtype=player.data.dtype)  # E(x)
 
         for iter_id, batch_begin in enumerate(range(0, num_rays, batch_size)):
             gstep_id = iter_id + gstep_id_base
@@ -554,8 +554,8 @@ def train_step():
             hessian_mse = hessian_func(gstep_id) * hessian_factor
             sampling_rate = sampling_rate_func(gstep_id) * sampling_factor
             # prune_tol_ratio = prune_tol_func(gstep_id)
-            with mcot.tree.accumulate_weights(op="sum") as accum:
-                rgb_pred = render.forward(b_rays, cuda=device == 'cuda')
+            # with mcot.tree.accumulate_weights(op="sum") as accum:
+            rgb_pred = render.forward(b_rays, cuda=device == 'cuda')
             mse = F.mse_loss(rgb_gt, rgb_pred)
             loss = mse.unsqueeze(0)
 
@@ -586,11 +586,14 @@ def train_step():
             # weights.append(weight)
             with torch.no_grad():
                 dif = rgb_gt-rgb_pred
-                error = torch.exp(args.mse_weights*(dif*dif).sum(-1))
-                # error = torch.ones_like(dif.sum(-1))
+                # error = torch.exp(-args.mse_weights*(dif*dif).sum(-1))
+                error = args.mse_weights*(dif*dif).sum(-1)
+                # print(f'error mean:{error.mean()}')
+                # print(f'error max:{error.max()}')
+                # print(f'error var:{error.var()}')
                 weight = mcot.reweight_rays(b_rays, error, render._get_options())
-                # weight = accum.value*torch.exp(-args.mse_weights*mse)
-                postier_weight += weight
+            #     # weight = accum.value*torch.exp(-args.mse_weights*mse)
+                s1 += weight
             mcot.tree.data.grad.zero_()
 
             # val, leaves = update_val_leaves(s1)
@@ -636,9 +639,10 @@ def train_step():
         # s1 /= rays_per_batch
 
         # calculate val_weights
+        VAL = s1
         
         if not prune:
-            val, leaves, prune_num = prune_func(postier_weight)
+            val, leaves, prune_num = prune_func(VAL)
             if prune_num is not None:
                 prune_delta = np.abs(pre_prune-prune_num)
                 pre_prune = prune_num
@@ -649,16 +653,16 @@ def train_step():
                 else:
                     print('Sample globally after prunning...')
                 mcot.tree.refine(repeats=args.pruneSampleRepeats)
+            
         if val is not None:
             prune = True   
-        else:
-            val = postier_weight 
+            
         # sigma = mcot._sigma()
         # if sigma.max().isinf():
         #     assert False, 'Inf density.'
         # sigma = torch.nan_to_num(sigma, nan=0)
         # summary_writer.add_histogram(f'train/sigma', sigma, gstep_id)
-        summary_writer.add_histogram(f'train/postier_weight', postier_weight, gstep_id)
+        summary_writer.add_histogram(f'train/weight', VAL, gstep_id)
         summary_writer.add_scalar(
             f'train/num_nodes', player.n_leaves, gstep_id)
         summary_writer.add_scalar(f'train/depth', player.get_depth(), gstep_id)
@@ -706,6 +710,7 @@ def train_step():
    
     with torch.no_grad():
         print('Start sampling...')
+        val, leaves = update_val_leaves(VAL)
         sample_k = int(max(1, player.n_leaves*sampling_rate))
         idxs = mcot.select(sample_k, val, leaves)
         # print(f'{idxs.size(0)}/{sample_k}')

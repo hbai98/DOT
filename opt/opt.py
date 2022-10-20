@@ -1,15 +1,10 @@
-# Copyright 2021 Alex Yu
-
-# First, install svox2
-# Then, python opt.py <path_to>/nerf_synthetic/<scene> -t ckpt/<some_name>
-# or use launching script:   sh launch.sh <EXP_NAME> <GPU> <DATA_DIR>
+from einops import rearrange
 import torch
 import torch.cuda
 import torch.optim
 import torch.nn.functional as F
-import svox2
+import svox
 import json
-import imageio
 import os
 from os import path
 import shutil
@@ -17,244 +12,148 @@ import gc
 import numpy as np
 import math
 import argparse
-import cv2
+from model.dot import DOT
+from model.utils import _SOFTPLUS_M1, threshold
 from util.dataset import datasets
-from util.util import Timing, get_expon_lr_func, generate_dirs_equirect, viridis_cmap
-from util import config_util
-
-from warnings import warn
+from util.util import get_expon_lr_func
+from util import adConfig
 from datetime import datetime
+
 from torch.utils.tensorboard import SummaryWriter
 
 from tqdm import tqdm
-
+import os
+# torch.cuda.set_device(6)
+# os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 device = "cuda" if torch.cuda.is_available() else "cpu"
-
 parser = argparse.ArgumentParser()
-config_util.define_common_args(parser)
-
-
+adConfig.define_common_args(parser)
 group = parser.add_argument_group("general")
+group.add_argument('--pre_trained_dir', '-p', type=str,
+                   help="Input the octree path for the extracted .npz file",)
 group.add_argument('--train_dir', '-t', type=str, default='ckpt',
-                     help='checkpoint and logging directory')
-
-group.add_argument('--reso',
-                        type=str,
-                        default=
-                        "[[256, 256, 256], [512, 512, 512]]",
-                       help='List of grid resolution (will be evaled as json);'
-                            'resamples to the next one every upsamp_every iters, then ' +
-                            'stays at the last one; ' +
-                            'should be a list where each item is a list of 3 ints or an int')
-group.add_argument('--upsamp_every', type=int, default=
-                     3 * 12800,
-                    help='upsample the grid every x iters')
-group.add_argument('--init_iters', type=int, default=
-                     0,
-                    help='do not upsample for first x iters')
-group.add_argument('--upsample_density_add', type=float, default=
-                    0.0,
-                    help='add the remaining density by this amount when upsampling')
-
-group.add_argument('--basis_type',
-                    choices=['sh', '3d_texture', 'mlp'],
-                    default='sh',
-                    help='Basis function type')
-
-group.add_argument('--basis_reso', type=int, default=32,
-                   help='basis grid resolution (only for learned texture)')
-group.add_argument('--sh_dim', type=int, default=9, help='SH/learned basis dimensions (at most 10)')
-
-group.add_argument('--mlp_posenc_size', type=int, default=4, help='Positional encoding size if using MLP basis; 0 to disable')
-group.add_argument('--mlp_width', type=int, default=32, help='MLP width if using MLP basis')
-
-group.add_argument('--background_nlayers', type=int, default=0,#32,
-                   help='Number of background layers (0=disable BG model)')
-group.add_argument('--background_reso', type=int, default=512, help='Background resolution')
-
-
-
+                   help='checkpoint and logging directory')
+group.add_argument('--num_epoches', type=int, default=80)
 group = parser.add_argument_group("optimization")
-group.add_argument('--n_iters', type=int, default=10 * 12800, help='total number of iters to optimize for')
-group.add_argument('--batch_size', type=int, default=
-                     5000,
-                     #100000,
-                     #  2000,
+group.add_argument('--batch_size', type=int, default=5,
                    help='batch size')
+group.add_argument('--val_interval', default=2,
+                   type=int, help='validation interval')
+group.add_argument('--lr', type=float, default=1e1,
+                   help='SGD/rmsprop lr for sigma')
 
-
-# TODO: make the lr higher near the end
-group.add_argument('--sigma_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Density optimizer")
-group.add_argument('--lr_sigma', type=float, default=3e1, help='SGD/rmsprop lr for sigma')
-group.add_argument('--lr_sigma_final', type=float, default=5e-2)
-group.add_argument('--lr_sigma_decay_steps', type=int, default=250000)
-group.add_argument('--lr_sigma_delay_steps', type=int, default=15000,
+group.add_argument('--hessian_mse', type=float, default=5e-4,
+                   help='Hessian check for updating models')
+group.add_argument('--hessian_mse_final', type=float, default=5e-5)
+group.add_argument('--hessian_mse_decay_steps', type=int, default=250000)
+group.add_argument('--hessian_mse_delay_steps', type=int, default=0,
                    help="Reverse cosine steps (0 means disable)")
-group.add_argument('--lr_sigma_delay_mult', type=float, default=1e-2)#1e-4)#1e-4)
+group.add_argument('--hessian_mse_delay_mult', type=float,
+                   default=1e-2)  # 1e-4)#1e-4)
+group.add_argument('--hessian_tolerance', type=int, default=5,
+                   help="the limit number of counter for hessian mse check")
 
-
-group.add_argument('--sh_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="SH optimizer")
-group.add_argument('--lr_sh', type=float, default=
-                    1e-2,
-                   help='SGD/rmsprop lr for SH')
-group.add_argument('--lr_sh_final', type=float,
-                      default=
-                    5e-6
-                    )
-group.add_argument('--lr_sh_decay_steps', type=int, default=250000)
-group.add_argument('--lr_sh_delay_steps', type=int, default=0, help="Reverse cosine steps (0 means disable)")
-group.add_argument('--lr_sh_delay_mult', type=float, default=1e-2)
-
-group.add_argument('--lr_fg_begin_step', type=int, default=0, help="Foreground begins training at given step number")
-
-# BG LRs
-group.add_argument('--bg_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Background optimizer")
-group.add_argument('--lr_sigma_bg', type=float, default=3e0,
-                    help='SGD/rmsprop lr for background')
-group.add_argument('--lr_sigma_bg_final', type=float, default=3e-3,
-                    help='SGD/rmsprop lr for background')
-group.add_argument('--lr_sigma_bg_decay_steps', type=int, default=250000)
-group.add_argument('--lr_sigma_bg_delay_steps', type=int, default=0, help="Reverse cosine steps (0 means disable)")
-group.add_argument('--lr_sigma_bg_delay_mult', type=float, default=1e-2)
-
-group.add_argument('--lr_color_bg', type=float, default=1e-1,
-                    help='SGD/rmsprop lr for background')
-group.add_argument('--lr_color_bg_final', type=float, default=5e-6,#1e-4,
-                    help='SGD/rmsprop lr for background')
-group.add_argument('--lr_color_bg_decay_steps', type=int, default=250000)
-group.add_argument('--lr_color_bg_delay_steps', type=int, default=0, help="Reverse cosine steps (0 means disable)")
-group.add_argument('--lr_color_bg_delay_mult', type=float, default=1e-2)
-# END BG LRs
-
-group.add_argument('--basis_optim', choices=['sgd', 'rmsprop'], default='rmsprop', help="Learned basis optimizer")
-group.add_argument('--lr_basis', type=float, default=#2e6,
-                      1e-6,
-                   help='SGD/rmsprop lr for SH')
-group.add_argument('--lr_basis_final', type=float,
-                      default=
-                      1e-6
-                    )
-group.add_argument('--lr_basis_decay_steps', type=int, default=250000)
-group.add_argument('--lr_basis_delay_steps', type=int, default=0,#15000,
+group.add_argument('--sample_after_prune',
+                   type=bool,
+                   default=False)
+group.add_argument('--sampling_rate', type=float,
+                   default=1e-1, help='Sampling on child nodes.')
+group.add_argument('--sampling_rate_final', type=float, default=3e-1)
+group.add_argument('--sampling_rate_decay_steps', type=int, default=250000)
+group.add_argument('--sampling_rate_delay_steps', type=int, default=0,
                    help="Reverse cosine steps (0 means disable)")
-group.add_argument('--lr_basis_begin_step', type=int, default=0)#4 * 12800)
-group.add_argument('--lr_basis_delay_mult', type=float, default=1e-2)
-
-group.add_argument('--rms_beta', type=float, default=0.95, help="RMSProp exponential averaging factor")
-
-group.add_argument('--print_every', type=int, default=20, help='print every')
-group.add_argument('--save_every', type=int, default=5,
-                   help='save every x epochs')
-group.add_argument('--eval_every', type=int, default=1,
-                   help='evaluate every x epochs')
-
-group.add_argument('--init_sigma', type=float,
-                   default=0.1,
-                   help='initialization sigma')
-group.add_argument('--init_sigma_bg', type=float,
-                   default=0.1,
-                   help='initialization sigma (for BG)')
-
+group.add_argument('--sampling_rate_delay_mult',
+                   type=float, default=1e-2)  # 1e-4)#1e-4)
+group.add_argument('--lr_sparsity_loss', type=float, default=1e-3)
+group.add_argument('--density_softplus', type=bool,
+                   default=True,)
+group.add_argument('--postier_weight', type=bool, default=True)
+group.add_argument('--rays_with_replacement', type=bool, default=True)
+group.add_argument('--mse_weights', type=float,
+                   default=50,
+                   )
+group.add_argument('--prune_tolerance', type=int, default=5,
+                   help="the limit number of counter for hessian mse check")
 # Extra logging
-group.add_argument('--log_mse_image', action='store_true', default=False)
-group.add_argument('--log_depth_map', action='store_true', default=False)
-group.add_argument('--log_depth_map_use_thresh', type=float, default=None,
-        help="If specified, uses the Dex-neRF version of depth with given thresh; else returns expected term")
+group.add_argument('--log_mse_image', action='store_true', default=True)
+group.add_argument('--log-video', action='store_true', default=False)
 
-
-group = parser.add_argument_group("misc experiments")
+group = parser.add_argument_group("mcot experiments")
+group.add_argument('--use_sparsity_loss',
+                   type=bool,
+                   default=True,
+                   )
+group.add_argument('--init_weight_sparsity_loss',
+                   type=float,
+                   default=0.01)
+group.add_argument('--use_variance', type=bool,
+                   default=False)
+group.add_argument('--thresh_method',
+                   choices=['li', 'otsu', 'minimum', 'constant', 'triangle'],
+                   default='li',
+                   help='dynamic threshold algorithms')
+group.add_argument('--thresh_val',
+                   type=float,
+                   default=0.256,
+                   help='constant threshold value')
+group.add_argument('--thresh_gaussian_sigma',
+                   type=int,
+                   default=3,
+                   )
+group.add_argument('--sh_dim', type=int, default=-1,
+                   help='SH/learned basis dimensions (at most 10)')
 group.add_argument('--thresh_type',
-                    choices=["weight", "sigma"],
-                    default="weight",
-                   help='Upsample threshold type')
-group.add_argument('--weight_thresh', type=float,
-                    default=0.0005 * 512,
-                    #  default=0.025 * 512,
-                   help='Upsample weight threshold; will be divided by resulting z-resolution')
-group.add_argument('--density_thresh', type=float,
-                    default=5.0,
-                   help='Upsample sigma threshold')
-group.add_argument('--background_density_thresh', type=float,
-                    default=1.0+1e-9,
-                   help='Background sigma threshold for sparsification')
-group.add_argument('--max_grid_elements', type=int,
-                    default=44_000_000,
-                   help='Max items to store after upsampling '
-                        '(the number here is given for 22GB memory)')
-
+                   choices=["weight", "sigma"],
+                   default="weight",
+                   help='threshold type')
+group.add_argument('--use_tv_loss',
+                   type=bool,
+                   default=True,
+                   )
+group.add_argument('--init_weight_tv_sigma_loss',
+                   type=float,
+                   default=None)
+group.add_argument('--init_weight_tv_color_loss',
+                   type=float,
+                   default=None)
+group.add_argument('--tv_thred',
+                   type=float,
+                   default=1e-2)
+group.add_argument('--lr_tv_loss', type=float, default=1e-3)
+group.add_argument('--prune_node_var_thred', type=float, default=1e-3)
+group.add_argument('--pruneSampleRepeats', type=int, default=1)
+group.add_argument('--rms_beta', type=float, default=0.95,
+                   help="RMSProp exponential averaging factor")
+group.add_argument('--distance_thred', type=float, default=1e-2)
+group.add_argument('--repeats', type=int, default=2)
+group.add_argument('--thresh_tol',
+                   type=float,
+                   default=0.7,
+                   help='tolerance of threshold')
+group.add_argument('--depth_limit', type=int,
+                   default=10,
+                   help='Maximum number of tree depth')
+group.add_argument('--max_nodes', type=int,
+                   default=1e7,
+                   help='(the number here is given for 22GB memory)'
+                   )
 group.add_argument('--tune_mode', action='store_true', default=False,
                    help='hypertuning mode (do not save, for speed)')
 group.add_argument('--tune_nosave', action='store_true', default=False,
                    help='do not save any checkpoint even at the end')
 
-
-
 group = parser.add_argument_group("losses")
-# Foreground TV
-group.add_argument('--lambda_tv', type=float, default=1e-5)
-group.add_argument('--tv_sparsity', type=float, default=0.01)
-group.add_argument('--tv_logalpha', action='store_true', default=False,
-                   help='Use log(1-exp(-delta * sigma)) as in neural volumes')
-
-group.add_argument('--lambda_tv_sh', type=float, default=1e-3)
-group.add_argument('--tv_sh_sparsity', type=float, default=0.01)
-
-group.add_argument('--lambda_tv_lumisphere', type=float, default=0.0)#1e-2)#1e-3)
-group.add_argument('--tv_lumisphere_sparsity', type=float, default=0.01)
-group.add_argument('--tv_lumisphere_dir_factor', type=float, default=0.0)
-
-group.add_argument('--tv_decay', type=float, default=1.0)
-
-group.add_argument('--lambda_l2_sh', type=float, default=0.0)#1e-4)
-group.add_argument('--tv_early_only', type=int, default=1, help="Turn off TV regularization after the first split/prune")
-
-group.add_argument('--tv_contiguous', type=int, default=1,
-                        help="Apply TV only on contiguous link chunks, which is faster")
-# End Foreground TV
-
-group.add_argument('--lambda_sparsity', type=float, default=
-                    0.0,
-                    help="Weight for sparsity loss as in SNeRG/PlenOctrees " +
-                         "(but applied on the ray)")
-group.add_argument('--lambda_beta', type=float, default=
-                    0.0,
-                    help="Weight for beta distribution sparsity loss as in neural volumes")
-
-
-# Background TV
-group.add_argument('--lambda_tv_background_sigma', type=float, default=1e-2)
-group.add_argument('--lambda_tv_background_color', type=float, default=1e-2)
-
-group.add_argument('--tv_background_sparsity', type=float, default=0.01)
-# End Background TV
-
-# Basis TV
-group.add_argument('--lambda_tv_basis', type=float, default=0.0,
-                   help='Learned basis total variation loss')
-# End Basis TV
-
 group.add_argument('--weight_decay_sigma', type=float, default=1.0)
 group.add_argument('--weight_decay_sh', type=float, default=1.0)
-
-group.add_argument('--lr_decay', action='store_true', default=True)
-
-group.add_argument('--n_train', type=int, default=None, help='Number of training images. Defaults to use all avaiable.')
-
-group.add_argument('--nosphereinit', action='store_true', default=False,
-                     help='do not start with sphere bounds (please do not use for 360)')
+group.add_argument('--decay', action='store_true', default=True)
+group.add_argument('--n_train', type=int, default=None,
+                   help='Number of training images. Defaults to use all avaiable.')
 
 args = parser.parse_args()
-config_util.maybe_merge_config_file(args)
-
-assert args.lr_sigma_final <= args.lr_sigma, "lr_sigma must be >= lr_sigma_final"
-assert args.lr_sh_final <= args.lr_sh, "lr_sh must be >= lr_sh_final"
-assert args.lr_basis_final <= args.lr_basis, "lr_basis must be >= lr_basis_final"
+adConfig.maybe_merge_config_file(args)
 
 os.makedirs(args.train_dir, exist_ok=True)
 summary_writer = SummaryWriter(args.train_dir)
-
-reso_list = json.loads(args.reso)
-reso_id = 0
 
 with open(path.join(args.train_dir, 'args.json'), 'w') as f:
     json.dump(args.__dict__, f, indent=2)
@@ -266,392 +165,474 @@ np.random.seed(20200823)
 
 factor = 1
 dset = datasets[args.dataset_type](
-               args.data_dir,
-               split="train",
-               device=device,
-               factor=factor,
-               n_images=args.n_train,
-               **config_util.build_data_options(args))
+    args.data_dir,
+    split="train",
+    device=device,
+    factor=factor,
+    n_images=args.n_train,
+    **adConfig.build_data_options(args))
 
-if args.background_nlayers > 0 and not dset.should_use_background:
-    warn('Using a background model for dataset type ' + str(type(dset)) + ' which typically does not use background')
+dset_name  = dset.__class__.__name__
 
+if dset_name == 'LLFFDataset':
+    ndc_conf = svox.NDCConfig(width=dset.w, height=dset.h, focal=dset.fx)
+else: 
+    ndc_conf = None
+norms = np.linalg.norm(dset.rays.dirs, axis=-1, keepdims=True)
 dset_test = datasets[args.dataset_type](
-        args.data_dir, split="test", **config_util.build_data_options(args))
-
+    args.data_dir, split="test", **adConfig.build_data_options(args))
 global_start_time = datetime.now()
 
-grid = svox2.SparseGrid(reso=reso_list[reso_id],
-                        center=dset.scene_center,
-                        radius=dset.scene_radius,
-                        use_sphere_bound=dset.use_sphere_bound and not args.nosphereinit,
-                        basis_dim=args.sh_dim,
-                        use_z_order=True,
-                        device=device,
-                        basis_reso=args.basis_reso,
-                        basis_type=svox2.__dict__['BASIS_TYPE_' + args.basis_type.upper()],
-                        mlp_posenc_size=args.mlp_posenc_size,
-                        mlp_width=args.mlp_width,
-                        background_nlayers=args.background_nlayers,
-                        background_reso=args.background_reso)
-
-# DC -> gray; mind the SH scaling!
-grid.sh_data.data[:] = 0.0
-grid.density_data.data[:] = 0.0 if args.lr_fg_begin_step > 0 else args.init_sigma
-
-if grid.use_background:
-    grid.background_data.data[..., -1] = args.init_sigma_bg
-    #  grid.background_data.data[..., :-1] = 0.5 / svox2.utils.SH_C0
-
-#  grid.sh_data.data[:, 0] = 4.0
-#  osh = grid.density_data.data.shape
-#  den = grid.density_data.data.view(grid.links.shape)
-#  #  den[:] = 0.00
-#  #  den[:, :256, :] = 1e9
-#  #  den[:, :, 0] = 1e9
-#  grid.density_data.data = den.view(osh)
-
-optim_basis_mlp = None
-
-if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
-    grid.reinit_learned_bases(init_type='sh')
-    #  grid.reinit_learned_bases(init_type='fourier')
-    #  grid.reinit_learned_bases(init_type='sg', upper_hemi=True)
-    #  grid.basis_data.data.normal_(mean=0.28209479177387814, std=0.001)
-
-elif grid.basis_type == svox2.BASIS_TYPE_MLP:
-    # MLP!
-    optim_basis_mlp = torch.optim.Adam(
-                    grid.basis_mlp.parameters(),
-                    lr=args.lr_basis
-                )
+data_format = None
+if args.sh_dim!=-1:
+    data_format = 'SH'+str(args.sh_dim)
+DOT = DOT(center=dset.scene_center,
+          radius=dset.scene_radius,
+          pre_train_pth=args.pre_trained_dir,
+          step_size=args.step_size,
+          depth_limit=args.depth_limit,
+          sigma_thresh=args.sigma_thresh,
+          stop_thresh=args.stop_thresh,
+          data_format=data_format,
+          device=device,
+          density_softplus=args.density_softplus,
+          init_weight_sparsity_loss=args.init_weight_sparsity_loss,
+          init_tv_sigma_loss=args.init_weight_tv_sigma_loss,
+          init_tv_color_loss=args.init_weight_tv_color_loss)
 
 
-grid.requires_grad_(True)
-config_util.setup_render_opts(grid.opt, args)
-print('Render options', grid.opt)
+hessian_func = get_expon_lr_func(args.hessian_mse, args.hessian_mse_final, args.hessian_mse_delay_steps,
+                                 args.hessian_mse_delay_mult, args.hessian_mse_decay_steps)
+sampling_rate_func = get_expon_lr_func(args.sampling_rate, args.sampling_rate_final, args.sampling_rate_delay_steps,
+                                       args.sampling_rate_delay_mult, args.sampling_rate_decay_steps)
 
-gstep_id_base = 0
+global delta_depth
 
-resample_cameras = [
-        svox2.Camera(c2w.to(device=device),
-                     dset.intrins.get('fx', i),
-                     dset.intrins.get('fy', i),
-                     dset.intrins.get('cx', i),
-                     dset.intrins.get('cy', i),
-                     width=dset.get_image_size(i)[1],
-                     height=dset.get_image_size(i)[0],
-                     ndc_coeffs=dset.ndc_coeffs) for i, c2w in enumerate(dset.c2w)
-    ]
-ckpt_path = path.join(args.train_dir, 'ckpt.npz')
-
-lr_sigma_func = get_expon_lr_func(args.lr_sigma, args.lr_sigma_final, args.lr_sigma_delay_steps,
-                                  args.lr_sigma_delay_mult, args.lr_sigma_decay_steps)
-lr_sh_func = get_expon_lr_func(args.lr_sh, args.lr_sh_final, args.lr_sh_delay_steps,
-                               args.lr_sh_delay_mult, args.lr_sh_decay_steps)
-lr_basis_func = get_expon_lr_func(args.lr_basis, args.lr_basis_final, args.lr_basis_delay_steps,
-                               args.lr_basis_delay_mult, args.lr_basis_decay_steps)
-lr_sigma_bg_func = get_expon_lr_func(args.lr_sigma_bg, args.lr_sigma_bg_final, args.lr_sigma_bg_delay_steps,
-                               args.lr_sigma_bg_delay_mult, args.lr_sigma_bg_decay_steps)
-lr_color_bg_func = get_expon_lr_func(args.lr_color_bg, args.lr_color_bg_final, args.lr_color_bg_delay_steps,
-                               args.lr_color_bg_delay_mult, args.lr_color_bg_decay_steps)
-lr_sigma_factor = 1.0
-lr_sh_factor = 1.0
-lr_basis_factor = 1.0
-
-last_upsamp_step = args.init_iters
-
-if args.enable_random:
-    warn("Randomness is enabled for training (normal for LLFF & scenes with background)")
+hessian_factor = 1.0
+sampling_factor = 1.0
 
 epoch_id = -1
-while True:
-    dset.shuffle_rays()
-    epoch_id += 1
-    epoch_size = dset.rays.origins.size(0)
-    batches_per_epoch = (epoch_size-1)//args.batch_size+1
-    # Test
-    def eval_step():
-        # Put in a function to avoid memory leak
-        print('Eval step')
-        with torch.no_grad():
-            stats_test = {'psnr' : 0.0, 'mse' : 0.0}
+gstep_id_base = 0
+gstep_id = 0
+delta_depth = 0
 
-            # Standard set
-            N_IMGS_TO_EVAL = min(20 if epoch_id > 0 else 5, dset_test.n_images)
-            N_IMGS_TO_SAVE = N_IMGS_TO_EVAL # if not args.tune_mode else 1
-            img_eval_interval = dset_test.n_images // N_IMGS_TO_EVAL
-            img_save_interval = (N_IMGS_TO_EVAL // N_IMGS_TO_SAVE)
-            img_ids = range(0, dset_test.n_images, img_eval_interval)
+max_psnr = 0
 
-            # Special 'very hard' specular + fuzz set
-            #  img_ids = [2, 5, 7, 9, 21,
-            #             44, 45, 47, 49, 56,
-            #             80, 88, 99, 115, 120,
-            #             154]
-            #  img_save_interval = 1
+cam_trans = torch.diag(torch.tensor(
+    [1, -1, -1, 1], dtype=torch.float32, device=device)).inverse()
 
-            n_images_gen = 0
-            for i, img_id in tqdm(enumerate(img_ids), total=len(img_ids)):
-                c2w = dset_test.c2w[img_id].to(device=device)
-                cam = svox2.Camera(c2w,
-                                   dset_test.intrins.get('fx', img_id),
-                                   dset_test.intrins.get('fy', img_id),
-                                   dset_test.intrins.get('cx', img_id),
-                                   dset_test.intrins.get('cy', img_id),
-                                   width=dset_test.get_image_size(img_id)[1],
-                                   height=dset_test.get_image_size(img_id)[0],
-                                   ndc_coeffs=dset_test.ndc_coeffs)
-                rgb_pred_test = grid.volume_render_image(cam, use_kernel=True)
-                rgb_gt_test = dset_test.gt[img_id].to(device=device)
-                all_mses = ((rgb_gt_test - rgb_pred_test) ** 2).cpu()
+param_groups = []
+if args.use_sparsity_loss:
+    param_groups.append({'params': DOT.w_sparsity,
+                        'lr': args.lr_sparsity_loss, 'name': 'sparsity_loss'})
+if args.use_tv_loss:
+    param_groups.append({'params': [DOT.w_sigma_tv, DOT.w_color_tv],
+                        'lr': args.lr_tv_loss, 'name': 'tv_loss'})
+
+param_groups.append({'params': DOT.tree.data,
+                    'lr': args.lr, 'name': 'tree'})
+
+
+
+def get_lr(optimizer, name):
+    for param_group in optimizer.param_groups:
+        if param_group == name:
+            return param_group['lr']
+
+if len(param_groups) != 0:
+    optim = torch.optim.AdamW(param_groups)
+
+
+def eval_step(save=True):
+    global gstep_id, gstep_id_base, max_psnr
+
+    # Put in a function to avoid memory leak
+    print('Eval step')
+    with torch.no_grad():
+        stats_test = {'psnr': 0.0, 'mse': 0.0}
+        depth = DOT.get_depth()
+
+        # Standard set
+        N_IMGS_TO_EVAL = min(20 if epoch_id > 0 else 5, dset_test.n_images)
+        N_IMGS_TO_SAVE = N_IMGS_TO_EVAL  # if not args.tune_mode else 1
+        img_eval_interval = dset_test.n_images // N_IMGS_TO_EVAL
+        img_save_interval = (N_IMGS_TO_EVAL // N_IMGS_TO_SAVE)
+        img_ids = range(0, dset_test.n_images, img_eval_interval)
+        n_images_gen = 0
+
+        for i, img_id in enumerate(img_ids):
+            # OpenCV to original
+            c2w = dset_test.c2w[img_id].to(device=device)
+            c2w = torch.mm(c2w, cam_trans)
+            rgb_pred_test = render.render_persp(c2w=c2w,
+                                                width=dset_test.get_image_size(img_id)[
+                                                    1],
+                                                height=dset_test.get_image_size(img_id)[
+                                                    0],
+                                                fx=dset_test.intrins.get(
+                                                    'fx', img_id),
+                                                fy=dset_test.intrins.get('fy', img_id),).clamp_(0.0, 1.0)
+            rgb_gt_test = dset_test.gt[img_id].to(device=device)
+            all_mses = ((rgb_gt_test - rgb_pred_test) ** 2).cpu()
+
+            if args.log_video:
+                pass
+            else:
                 if i % img_save_interval == 0:
                     img_pred = rgb_pred_test.cpu()
                     img_pred.clamp_max_(1.0)
-                    summary_writer.add_image(f'test/image_{img_id:04d}',
-                            img_pred, global_step=gstep_id_base, dataformats='HWC')
+                    summary_writer.add_image(f'test/image_depth_{depth}_{img_id:04d}',
+                                             img_pred, global_step=gstep_id_base, dataformats='HWC')
                     if args.log_mse_image:
                         mse_img = all_mses / all_mses.max()
-                        summary_writer.add_image(f'test/mse_map_{img_id:04d}',
-                                mse_img, global_step=gstep_id_base, dataformats='HWC')
-                    if args.log_depth_map:
-                        depth_img = grid.volume_render_depth_image(cam,
-                                    args.log_depth_map_use_thresh if
-                                    args.log_depth_map_use_thresh else None
-                                )
-                        depth_img = viridis_cmap(depth_img.cpu())
-                        summary_writer.add_image(f'test/depth_map_{img_id:04d}',
-                                depth_img,
-                                global_step=gstep_id_base, dataformats='HWC')
+                        summary_writer.add_image(f'test/mse_map_depth_{depth}_{img_id:04d}',
+                                                 mse_img, global_step=gstep_id_base, dataformats='HWC')
 
-                rgb_pred_test = rgb_gt_test = None
-                mse_num : float = all_mses.mean().item()
-                psnr = -10.0 * math.log10(mse_num)
-                if math.isnan(psnr):
-                    print('NAN PSNR', i, img_id, mse_num)
-                    assert False
-                stats_test['mse'] += mse_num
-                stats_test['psnr'] += psnr
-                n_images_gen += 1
+            rgb_pred_test = rgb_gt_test = None
+            mse_num: float = all_mses.mean().item()
+            psnr = -10.0 * math.log10(mse_num)
+            if math.isnan(psnr):
+                print('NAN PSNR', i, img_id, mse_num)
+                assert False
+            stats_test['mse'] += mse_num
+            stats_test['psnr'] += psnr
+            n_images_gen += 1
 
-            if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE or \
-               grid.basis_type == svox2.BASIS_TYPE_MLP:
-                 # Add spherical map visualization
-                EQ_RESO = 256
-                eq_dirs = generate_dirs_equirect(EQ_RESO * 2, EQ_RESO)
-                eq_dirs = torch.from_numpy(eq_dirs).to(device=device).view(-1, 3)
+        stats_test['mse'] /= n_images_gen
+        stats_test['psnr'] /= n_images_gen
+        for stat_name in stats_test:
+            summary_writer.add_scalar('test/' + stat_name,
+                                      stats_test[stat_name], global_step=gstep_id_base)
+        summary_writer.add_scalar('epoch_id', float(
+            epoch_id), global_step=gstep_id_base)
+        
+        if stats_test['psnr'] > max_psnr:
+            max_psnr = stats_test['psnr']
+            if save:
+                ckpt_path = path.join(args.train_dir, f'ckpt_best.npz')
+                print('Saving best:', ckpt_path)
+                player.save(ckpt_path)
+        print('eval stats:', stats_test)
+    
+    return stats_test['psnr']
 
-                if grid.basis_type == svox2.BASIS_TYPE_MLP:
-                    sphfuncs = grid._eval_basis_mlp(eq_dirs)
-                else:
-                    sphfuncs = grid._eval_learned_bases(eq_dirs)
-                sphfuncs = sphfuncs.view(EQ_RESO, EQ_RESO*2, -1).permute([2, 0, 1]).cpu().numpy()
 
-                stats = [(sphfunc.min(), sphfunc.mean(), sphfunc.max())
-                        for sphfunc in sphfuncs]
-                sphfuncs_cmapped = [viridis_cmap(sphfunc) for sphfunc in sphfuncs]
-                for im, (minv, meanv, maxv) in zip(sphfuncs_cmapped, stats):
-                    cv2.putText(im, f"{minv=:.4f} {meanv=:.4f} {maxv=:.4f}", (10, 20),
-                                0, 0.5, [255, 0, 0])
-                sphfuncs_cmapped = np.concatenate(sphfuncs_cmapped, axis=0)
-                summary_writer.add_image(f'test/spheric',
-                        sphfuncs_cmapped, global_step=gstep_id_base, dataformats='HWC')
-                # END add spherical map visualization
+def update_val_leaves(instant_weights):
+    leaves = DOT.tree._all_leaves()
+    if args.thresh_type == 'weight':
+        val = instant_weights[(*leaves.long().T, )]
+    elif args.thresh_type == 'sigma':
+        val = DOT.tree.data[(*leaves.long().T, )][..., -1]
+    val = torch.nan_to_num(val, nan=0)
+    return val, leaves
 
-            stats_test['mse'] /= n_images_gen
-            stats_test['psnr'] /= n_images_gen
-            for stat_name in stats_test:
-                summary_writer.add_scalar('test/' + stat_name,
-                        stats_test[stat_name], global_step=gstep_id_base)
-            summary_writer.add_scalar('epoch_id', float(epoch_id), global_step=gstep_id_base)
-            print('eval stats:', stats_test)
-    if epoch_id % max(factor, args.eval_every) == 0: #and (epoch_id > 0 or not args.tune_mode):
-        # NOTE: we do an eval sanity check, if not in tune_mode
-        eval_step()
-        gc.collect()
 
-    def train_step():
-        print('Train step')
-        pbar = tqdm(enumerate(range(0, epoch_size, args.batch_size)), total=batches_per_epoch)
-        stats = {"mse" : 0.0, "psnr" : 0.0, "invsqr_mse" : 0.0}
-        for iter_id, batch_begin in pbar:
+def prune_func(instant_weights):
+    global pre_distance, distance_thred_count
+    with torch.no_grad():
+        leaves = DOT.tree._all_leaves()
+        sel = (*leaves.long().T, )
+
+        if args.thresh_type == 'sigma':
+            val = DOT.tree.data[sel][..., -1]
+        elif args.thresh_type == 'num_visits':
+            assert args.record_tree, 'Pruning by num_visits is only accessible when record_tree option is true.'
+        elif args.thresh_type == 'weight':
+            val = instant_weights[sel]
+
+        val = torch.nan_to_num(val, nan=0)
+        # smoothed =
+        if args.thresh_method == 'constant':
+            thred = args.thresh_val
+        else:
+            thred = threshold(val, args.thresh_method,
+                              args.thresh_gaussian_sigma)
+            # thred = min(thred, args.prune_max)
+        if thred is None:
+            assert False, 'Threshold is wrong.'
+        s1 = val[val > thred]
+        s2 = val[val <= thred]
+
+        distance = torch.abs(s1.mean()-s2.mean())/torch.sqrt(s1.var()+s2.var())
+        dif = torch.abs(distance-pre_distance)
+        pre_distance = distance
+        summary_writer.add_scalar(f'train/d_delta', dif, gstep_id)
+
+        if dif >= args.distance_thred:
+            distance_thred_count = 0
+            return None, None, None
+        else:
+            distance_thred_count += 1
+
+        if distance_thred_count < args.prune_tolerance:
+            return None, None, None
+
+        pre_sel = None
+        toltal = 0
+        print(f'Prunning at {thred}/{val.max()}')
+        while True:
+            # smoothed = gaussian(val.cpu().detach().numpy(), sigma=args.thresh_gaussian_sigma)
+            sel = leaves[val < thred]
+            nids, counts = torch.unique(sel[:, 0], return_counts=True)
+            # discover the fronts whose all children are included in sel
+            mask = (counts >= int(DOT.tree.N**3*args.thresh_tol)).numpy()
+
+            sel_nids = nids[mask]
+            parent_sel = (*DOT.tree._unpack_index(
+                DOT.tree.parent_depth[sel_nids, 0]).long().T,)
+
+            if pre_sel is not None:
+                if sel_nids.size(0) == 0 or torch.equal(pre_sel, sel_nids):
+                    break
+
+            pre_sel = sel_nids
+            DOT.merge(sel_nids)
+            n = len(sel_nids)*DOT.tree.N ** 3
+            toltal += n
+            print(f'Prune {n}/{leaves.size(0)}')
+
+            reduced = instant_weights[sel_nids].view(
+                -1, DOT.tree.N ** 3).sum(-1)
+            instant_weights[parent_sel] = reduced
+
+            val, leaves = update_val_leaves(instant_weights)
+
+        summary_writer.add_scalar(f'train/number_prune', toltal, gstep_id)
+        return val, leaves, toltal
+
+
+def train_step():
+    global gstep_id, gstep_id_base, delta_depth, thred, pre_distance, distance_thred_count
+    print('Train step')
+    stats = {"mse": 0.0, "psnr": 0.0, "invsqr_mse": 0.0}
+    pre_delta_mse = 0
+    pre_mse = 0
+    counter = 0
+    batch_size = int(dset.h*dset.w*args.batch_size)
+    num_rays = dset.rays.origins.size(0)
+    rays_per_batch = (num_rays-1)//batch_size+1
+    pre_prune = 0
+    pre_distance = 0
+    distance_thred_count = 0
+    prune_delta = torch.inf
+    prune = False
+
+    # stimulate
+    while True:
+        # important to make the learned properties stable.
+        # dset.shuffle_rays()
+        if args.rays_with_replacement:
+            indexer = torch.randint(dset.rays.origins.size(
+                0), (dset.rays.origins.size(0),))
+        else:
+            indexer = torch.randperm(dset.rays.origins.size(0))
+        norms = np.linalg.norm(dset.rays.dirs, axis=-1, keepdims=True)
+        viewdirs = dset.rays.dirs / norms
+        rays = svox.Rays(dset.rays.origins[indexer],
+                         dset.rays.dirs[indexer], viewdirs[indexer])
+        gt = dset.rays.gt[indexer]
+        # updata params
+        s1 = torch.zeros_like(player.child, device=device,
+                              dtype=player.data.dtype)  # E(x)
+
+        for iter_id, batch_begin in enumerate(range(0, num_rays, batch_size)):
             gstep_id = iter_id + gstep_id_base
-            if args.lr_fg_begin_step > 0 and gstep_id == args.lr_fg_begin_step:
-                grid.density_data.data[:] = args.init_sigma
-            lr_sigma = lr_sigma_func(gstep_id) * lr_sigma_factor
-            lr_sh = lr_sh_func(gstep_id) * lr_sh_factor
-            lr_basis = lr_basis_func(gstep_id - args.lr_basis_begin_step) * lr_basis_factor
-            lr_sigma_bg = lr_sigma_bg_func(gstep_id - args.lr_basis_begin_step) * lr_basis_factor
-            lr_color_bg = lr_color_bg_func(gstep_id - args.lr_basis_begin_step) * lr_basis_factor
-            if not args.lr_decay:
-                lr_sigma = args.lr_sigma * lr_sigma_factor
-                lr_sh = args.lr_sh * lr_sh_factor
-                lr_basis = args.lr_basis * lr_basis_factor
+            batch_end = min(batch_begin + batch_size, num_rays)
+            batch_origins = rays.origins[batch_begin: batch_end].to(
+                device)
+            batch_dirs = rays.dirs[batch_begin: batch_end].to(device)
+            batch_viewdir = rays.viewdirs[batch_begin: batch_end].to(device)
+            rgb_gt = gt[batch_begin: batch_end].to(device)
+            b_rays = svox.Rays(batch_origins, batch_dirs, batch_viewdir)
 
-            batch_end = min(batch_begin + args.batch_size, epoch_size)
-            batch_origins = dset.rays.origins[batch_begin: batch_end]
-            batch_dirs = dset.rays.dirs[batch_begin: batch_end]
-            rgb_gt = dset.rays.gt[batch_begin: batch_end]
-            rays = svox2.Rays(batch_origins, batch_dirs)
-            
-            #  with Timing("volrend_fused"):
-            rgb_pred = grid.volume_render_fused(rays, rgb_gt,
-                    beta_loss=args.lambda_beta,
-                    sparsity_loss=args.lambda_sparsity,
-                    randomize=args.enable_random)
+            hessian_mse = hessian_func(gstep_id) * hessian_factor
+            sampling_rate = sampling_rate_func(gstep_id) * sampling_factor
+            rgb_pred = render.forward(b_rays, cuda=device == 'cuda')
+            mse = F.mse_loss(rgb_gt, rgb_pred)
+            loss = mse.unsqueeze(0)
 
-            #  with Timing("loss_comp"):
+            with torch.no_grad():
+                if not args.postier_weight:
+                    with player.accumulate_weights(op="sum") as accum:
+                        rgb_pred = render.forward(
+                            b_rays, cuda=device == 'cuda')
+                        weight = accum.value
+                else:
+                    rgb_pred = render.forward(b_rays, cuda=device == 'cuda')
+                    dif = rgb_gt-rgb_pred
+                    error = args.mse_weights*(dif*dif).sum(-1)
+                    weight = DOT.reweight_rays(
+                        b_rays, error, render._get_options())
+            s1 += weight
             mse = F.mse_loss(rgb_gt, rgb_pred)
 
-            # Stats
-            mse_num : float = mse.detach().item()
+            if args.use_sparsity_loss:
+                sigma = DOT._sigma()
+                # loss_sparsity = torch.abs(mcot.w_sparsity)*torch.abs(1-args.sparse_weight*torch.exp(-sigma)).mean()
+                # Cauchy version (from SNeRG)
+                loss_sparsity = DOT._w_sparsity * \
+                    torch.log(1+2*sigma*sigma).mean()
+                loss += loss_sparsity
+
+            if args.use_tv_loss:
+                sel = DOT.tree._frontier
+                sel = np.random.choice(
+                    sel.cpu().numpy(), int(args.tv_thred*sel.size(0)))
+                depths = DOT.tree.parent_depth[sel, 1]
+                # color = mcot.tree.data[sel][..., :-1]*depths[]
+                sigma = DOT.tree.data[sel][..., -1]
+                color = rearrange(color, 'n x y z d -> (n d) (x y z)')
+                sigma = rearrange(sigma, 'n x y z -> n (x y z)')
+
+                loss_tv = DOT._w_color_tv*torch.std(color, dim=-1).mean() +\
+                    DOT._w_sigma_tv*torch.std(sigma, dim=-1).mean()
+                loss += loss_tv
+
+            loss.backward()
+            optim.step()
+            optim.zero_grad()
+
+            mse_num: float = mse.detach().item()
             psnr = -10.0 * math.log10(mse_num)
+            if math.isnan(psnr):
+                assert False, 'NAN PSNR'
             stats['mse'] += mse_num
             stats['psnr'] += psnr
             stats['invsqr_mse'] += 1.0 / mse_num ** 2
 
-            if (iter_id + 1) % args.print_every == 0:
-                # Print averaged stats
-                pbar.set_description(f'epoch {epoch_id} psnr={psnr:.2f}')
-                for stat_name in stats:
-                    stat_val = stats[stat_name] / args.print_every
-                    summary_writer.add_scalar(stat_name, stat_val, global_step=gstep_id)
-                    stats[stat_name] = 0.0
-                #  if args.lambda_tv > 0.0:
-                #      with torch.no_grad():
-                #          tv = grid.tv(logalpha=args.tv_logalpha, ndc_coeffs=dset.ndc_coeffs)
-                #      summary_writer.add_scalar("loss_tv", tv, global_step=gstep_id)
-                #  if args.lambda_tv_sh > 0.0:
-                #      with torch.no_grad():
-                #          tv_sh = grid.tv_color()
-                #      summary_writer.add_scalar("loss_tv_sh", tv_sh, global_step=gstep_id)
-                #  with torch.no_grad():
-                #      tv_basis = grid.tv_basis() #  summary_writer.add_scalar("loss_tv_basis", tv_basis, global_step=gstep_id)
-                summary_writer.add_scalar("lr_sh", lr_sh, global_step=gstep_id)
-                summary_writer.add_scalar("lr_sigma", lr_sigma, global_step=gstep_id)
-                if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
-                    summary_writer.add_scalar("lr_basis", lr_basis, global_step=gstep_id)
-                if grid.use_background:
-                    summary_writer.add_scalar("lr_sigma_bg", lr_sigma_bg, global_step=gstep_id)
-                    summary_writer.add_scalar("lr_color_bg", lr_color_bg, global_step=gstep_id)
-                if args.weight_decay_sh < 1.0:
-                    grid.sh_data.data *= args.weight_decay_sigma
-                if args.weight_decay_sigma < 1.0:
-                    grid.density_data.data *= args.weight_decay_sh
+            if args.use_variance:
+                pass
+                # # weight varibility
+                # weights.append(weight)
 
-            #  # For outputting the % sparsity of the gradient
-            #  indexer = grid.sparse_sh_grad_indexer
-            #  if indexer is not None:
-            #      if indexer.dtype == torch.bool:
-            #          nz = torch.count_nonzero(indexer)
-            #      else:
-            #          nz = indexer.size()
-            #      with open(os.path.join(args.train_dir, 'grad_sparsity.txt'), 'a') as sparsity_file:
-            #          sparsity_file.write(f"{gstep_id} {nz}\n")
+            # log
+            if args.use_sparsity_loss:
+                summary_writer.add_scalar(
+                    "train/w_sparsity", DOT._w_sparsity, global_step=gstep_id
+                )
+            if args.use_tv_loss:
+                summary_writer.add_scalar(
+                    "train/w_tv_color",  DOT._w_color_tv, global_step=gstep_id
+                )
+                summary_writer.add_scalar(
+                    "train/w_tv_sigma", DOT._w_sigma_tv, global_step=gstep_id
+                )
 
-            # Apply TV/Sparsity regularizers
-            if args.lambda_tv > 0.0:
-                #  with Timing("tv_inpl"):
-                grid.inplace_tv_grad(grid.density_data.grad,
-                        scaling=args.lambda_tv,
-                        sparse_frac=args.tv_sparsity,
-                        logalpha=args.tv_logalpha,
-                        ndc_coeffs=dset.ndc_coeffs,
-                        contiguous=args.tv_contiguous)
-            if args.lambda_tv_sh > 0.0:
-                #  with Timing("tv_color_inpl"):
-                grid.inplace_tv_color_grad(grid.sh_data.grad,
-                        scaling=args.lambda_tv_sh,
-                        sparse_frac=args.tv_sh_sparsity,
-                        ndc_coeffs=dset.ndc_coeffs,
-                        contiguous=args.tv_contiguous)
-            if args.lambda_tv_lumisphere > 0.0:
-                grid.inplace_tv_lumisphere_grad(grid.sh_data.grad,
-                        scaling=args.lambda_tv_lumisphere,
-                        dir_factor=args.tv_lumisphere_dir_factor,
-                        sparse_frac=args.tv_lumisphere_sparsity,
-                        ndc_coeffs=dset.ndc_coeffs)
-            if args.lambda_l2_sh > 0.0:
-                grid.inplace_l2_color_grad(grid.sh_data.grad,
-                        scaling=args.lambda_l2_sh)
-            if grid.use_background and (args.lambda_tv_background_sigma > 0.0 or args.lambda_tv_background_color > 0.0):
-                grid.inplace_tv_background_grad(grid.background_data.grad,
-                        scaling=args.lambda_tv_background_color,
-                        scaling_density=args.lambda_tv_background_sigma,
-                        sparse_frac=args.tv_background_sparsity,
-                        contiguous=args.tv_contiguous)
-            if args.lambda_tv_basis > 0.0:
-                tv_basis = grid.tv_basis()
-                loss_tv_basis = tv_basis * args.lambda_tv_basis
-                loss_tv_basis.backward()
-            #  print('nz density', torch.count_nonzero(grid.sparse_grad_indexer).item(),
-            #        ' sh', torch.count_nonzero(grid.sparse_sh_grad_indexer).item())
+        # check if the model gets stable by hessian mse
+        delta_mse = stats['mse']-pre_mse
+        abs_dmse = np.abs(delta_mse)
+        _hessian_mse = np.abs(abs_dmse-pre_delta_mse)
+        pre_mse = stats['mse']
+        pre_delta_mse = abs_dmse
 
-            # Manual SGD/rmsprop step
-            if gstep_id >= args.lr_fg_begin_step:
-                grid.optim_density_step(lr_sigma, beta=args.rms_beta, optim=args.sigma_optim)
-                grid.optim_sh_step(lr_sh, beta=args.rms_beta, optim=args.sh_optim)
-            if grid.use_background:
-                grid.optim_background_step(lr_sigma_bg, lr_color_bg, beta=args.rms_beta, optim=args.bg_optim)
-            if gstep_id >= args.lr_basis_begin_step:
-                if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
-                    grid.optim_basis_step(lr_basis, beta=args.rms_beta, optim=args.basis_optim)
-                elif grid.basis_type == svox2.BASIS_TYPE_MLP:
-                    optim_basis_mlp.step()
-                    optim_basis_mlp.zero_grad()
+        VAL = s1
 
-    train_step()
-    gc.collect()
-    gstep_id_base += batches_per_epoch
+        if not prune:
+            val, leaves, prune_num = prune_func(VAL)
+            if prune_num is not None:
+                prune_delta = np.abs(pre_prune-prune_num)
+                pre_prune = prune_num
+        # to thrust sampling with refine_numb
+            if args.sample_after_prune:
+                if args.pruneSampleRepeats == 0:
+                    print('Stabalize it...')
+                else:
+                    print('Sample globally after prunning...')
+                DOT.tree.refine(repeats=args.pruneSampleRepeats)
 
-    #  ckpt_path = path.join(args.train_dir, f'ckpt_{epoch_id:05d}.npz')
-    # Overwrite prev checkpoints since they are very huge
-    if args.save_every > 0 and (epoch_id + 1) % max(
-            factor, args.save_every) == 0 and not args.tune_mode:
-        print('Saving', ckpt_path)
-        grid.save(ckpt_path)
+        if val is not None:
+            prune = True
 
-    if (gstep_id_base - last_upsamp_step) >= args.upsamp_every:
-        last_upsamp_step = gstep_id_base
-        if reso_id < len(reso_list) - 1:
-            print('* Upsampling from', reso_list[reso_id], 'to', reso_list[reso_id + 1])
-            if args.tv_early_only > 0:
-                print('turning off TV regularization')
-                args.lambda_tv = 0.0
-                args.lambda_tv_sh = 0.0
-            elif args.tv_decay != 1.0:
-                args.lambda_tv *= args.tv_decay
-                args.lambda_tv_sh *= args.tv_decay
+        # sigma = mcot._sigma()
+        # if sigma.max().isinf():
+        #     assert False, 'Inf density.'
+        # sigma = torch.nan_to_num(sigma, nan=0)
+        # summary_writer.add_histogram(f'train/sigma', sigma, gstep_id)
+        summary_writer.add_histogram(f'train/weight', VAL, gstep_id)
+        summary_writer.add_scalar(
+            f'train/num_nodes', player.n_leaves, gstep_id)
+        summary_writer.add_scalar(f'train/depth', DOT.get_depth(), gstep_id)
+        lr = get_lr(optim, 'tree')
 
-            reso_id += 1
-            use_sparsify = True
-            z_reso = reso_list[reso_id] if isinstance(reso_list[reso_id], int) else reso_list[reso_id][2]
-            grid.resample(reso=reso_list[reso_id],
-                    sigma_thresh=args.density_thresh,
-                    weight_thresh=args.weight_thresh / z_reso if use_sparsify else 0.0,
-                    dilate=2, #use_sparsify,
-                    cameras=resample_cameras if args.thresh_type == 'weight' else None,
-                    max_elements=args.max_grid_elements)
+        summary_writer.add_scalar(
+            "train/lr", lr, global_step=gstep_id)
+        summary_writer.add_scalar('train/thred_mse', hessian_mse, gstep_id)
+        summary_writer.add_scalar(
+            'train/sampling_rate', sampling_rate, gstep_id)
 
-            if grid.use_background and reso_id <= 1:
-                grid.sparsify_background(args.background_density_thresh)
+        summary_writer.add_scalar('train/hessian_mse', _hessian_mse, gstep_id)
 
-            if args.upsample_density_add:
-                grid.density_data.data[:] += args.upsample_density_add
+        for stat_name in stats:
+            stat_val = stats[stat_name] / rays_per_batch
+            summary_writer.add_scalar(f'train/{stat_name}', stat_val, gstep_id)
+            stats[stat_name] = 0
 
-        if factor > 1 and reso_id < len(reso_list) - 1:
-            print('* Using higher resolution images due to large grid; new factor', factor)
-            factor //= 2
-            dset.gen_rays(factor=factor)
-            dset.shuffle_rays()
+        if _hessian_mse <= hessian_mse:
+            counter += 1
+            if counter > args.hessian_tolerance:
+                break
+        else:
+            counter = 0
 
-    if gstep_id_base >= args.n_iters:
-        print('* Final eval and save')
+        gstep_id_base += rays_per_batch
+
+    if delta_depth != 0 and not args.tune_mode:
         eval_step()
-        global_stop_time = datetime.now()
-        secs = (global_stop_time - global_start_time).total_seconds()
-        timings_file = open(os.path.join(args.train_dir, 'time_mins.txt'), 'a')
-        timings_file.write(f"{secs / 60}\n")
-        if not args.tune_nosave:
-            grid.save(ckpt_path)
-        break
+        depth = DOT.get_depth()
+        ckpt_path = path.join(args.train_dir, f'ckpt_depth_{depth}.npz')
+        print('Saving', ckpt_path)
+        player.save(ckpt_path)
+        gc.collect()
+        pbar.update(delta_depth)
+    # threshold
+    # the flag used to skip selection and expansion; to give more time to
+    # obtain stable properties
+    continue_ = True
+
+    with torch.no_grad():
+        print('Start sampling...')
+        val, leaves = update_val_leaves(VAL)
+        sample_k = int(max(1, player.n_leaves*sampling_rate))
+        idxs = DOT.select(sample_k, val, leaves)
+        interval = idxs.size(0)//args.repeats
+        for i in range(1, args.repeats+1):
+            start = (i-1)*interval
+            end = i*interval
+            sel = idxs[start:end]
+            continue_ = DOT.expand(sel, i)
+
+    summary_writer.add_scalar(f'train/num_nodes', player.n_leaves, gstep_id)
+    summary_writer.add_scalar(f'train/depth', DOT.get_depth(), gstep_id)
+
+    # prune check
+    var = prune_delta/DOT.tree.n_leaves
+    if prune_delta != 0 and var < args.prune_node_var_thred:
+        print(
+            f'The tree becomes stable with nodes number variance {var} less than {args.prune_node_var_thred}. Stop optimization.')
+        eval_step()
+        continue_ = False
+    return continue_
+
+
+with tqdm(total=args.depth_limit) as pbar:
+    player = DOT.tree
+    depth = DOT.get_depth()
+    pbar.update(depth.item())
+    render = DOT._volumeRenderer(ndc_conf)
+    # render = svox.VolumeRenderer(t, step_size=FLAGS.renderer_step_size, ndc=ndc_config)
+    best_validation_psnr = eval_step(save=False)
+    print('** initial val psnr ', best_validation_psnr)
+    assert 0
+    while True:
+        epoch_id += 1
+        player = DOT.tree
+        # render = mcot._volumeRenderer(dset.ndc_coeffs)
+        render = DOT._volumeRenderer(ndc_conf)
+        depth = player.get_depth()
+
+        flag = train_step()
+        delta_depth = (player.get_depth()-depth).item()
+
+        if depth >= args.depth_limit or not flag:
+            break
+        gc.collect()

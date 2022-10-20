@@ -14,37 +14,31 @@ module load cuda-11.4
 source activate
 conda activate Adnerf
 
-experiment_name=mcots/test/thresh_method/init_7/test_2
+# experiment_name=mcots/test/init
+# config=opt/configs/DOT/syn.json
 
-# config=opt/configs/syn_b1.json
-config=opt/configs/syn.json
+# pre_dir=/hy-tmp/syn_sh16_octrees/oct_drums_sgd1e7_asthre0_1_rad1_4_sample256/tree.npz
+# CKPT_DIR=/hy-tmp/checkpoints/${experiment_name}
+# data_dir=/hy-tmp/nerf_synthetic/drums
+# mkdir -p $CKPT_DIR
+# NOHUP_FILE=$CKPT_DIR/log
 
-CKPT_DIR=checkpoints/${experiment_name}
-data_dir=/hy-tmp/nerf_synthetic/drums
-mkdir -p $CKPT_DIR
-NOHUP_FILE=$CKPT_DIR/log
+# echo Launching experiment ${expriment_name}
+# echo CKPT $CKPT_DIR
+# echo LOGFILE $NOHUP_FILE
+# # python -m unittest test.test_mcots.TestMCOTS.test_run_a_round
+# python opt/opt.py -t $CKPT_DIR ${data_dir} -c ${config} -p ${pre_dir} > $NOHUP_FILE 2>&1  
+# echo DETACH
 
-echo Launching experiment ${expriment_name}
-echo CKPT $CKPT_DIR
-echo LOGFILE $NOHUP_FILE
-# python -m unittest test.test_mcots.TestMCOTS.test_run_a_round
-python opt/ad_opt.py -t $CKPT_DIR ${data_dir} -c ${config}  > $NOHUP_FILE 2>&1  
-echo DETACH
 
-# CUDA_VISIBLE_DEVICES=6
+export DATA_ROOT=/hy-tmp/nerf_synthetic
+export CKPT_ROOT=/hy-tmp/checkpoints
+export pre_dir=/hy-tmp/syn_sh16_octrees/oct_drums_sgd1e7_asthre0_1_rad1_4_sample256
+export SCENE=drums
+export CONFIG_FILE=nerf_sh/config/blender
 
-# dataset='office_home'
-# port=3039
-# GPUS=1
-# lr='5e-6'
-# cfg='configs/swin_base.yaml'
-# root='swin_loss'
-
-# source='Art'
-# target='Clipart'
-# log_path="log/${dataset}/${root}/${source}_${target}/${lr}"
-# out_path="results/${dataset}/${root}/${source}_${target}/${lr}"
-
-# python -m torch.distributed.run --nproc_per_node ${GPUS} --master_port ${port} dist_pmTrans.py --use-checkpoint \
-# --source ${source} --target ${target} --dataset ${dataset}  --tag PM --local_rank 0 --batch-size 30 --head_lr_ratio 10 --log ${log_path} --output ${out_path} \
-# --cfg ${cfg} 
+python -m octree.optimization \
+    --input $pre_dir/tree.npz \
+    --config $CONFIG_FILE \
+    --data_dir $DATA_ROOT/$SCENE/ \
+    --output $CKPT_ROOT/$SCENE/tree_opt.npz

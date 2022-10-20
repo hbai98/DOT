@@ -1,0 +1,54 @@
+{   
+    "lr": 1e-3,
+    "rays_with_replacement":true,
+
+    "mse_weights":2,
+
+    "prune_tolerance":3,
+    "hessian_tolerance":6,
+
+    "distance_thred":1e-2,
+    "prune_node_var_thred":1e-1,
+
+    "use_sparsity_loss":false,
+    "init_weight_sparsity_loss":1e-4,
+    "lr_sparsity_loss":1e-3,
+
+    "tv_thred":1e-2,
+    "use_tv_loss":false,
+    "init_weight_tv_sigma_loss":1e-5,
+    "init_weight_tv_color_loss":1e-3,
+    "lr_tv_loss":5e-2,
+
+
+    "rms_beta":0.95,
+  
+    "hessian_mse":5e-4,
+    "hessian_mse_final":5e-5,
+    "hessian_mse_delay_steps": 0,
+    "hessian_mse_decay_steps":2e3,
+
+    "depth_limit":20,
+
+    "sigma_thresh":1e-8,
+    "stop_thresh":0,
+    "thresh_type":"weight",
+    "thresh_method":"triangle",
+    "thresh_val":0.25,
+    "thresh_gaussian_sigma":3,
+    "thresh_tol":0.9,
+
+    "density_softplus":true,
+
+    "step_size":1e-5,   
+    "batch_size":5,  
+    "sampling_rate":1e-1,
+    "sampling_rate_final":1e-2,
+    "sampling_rate_decay_steps":1e4,
+    "sample_after_prune":true,
+    "repeats":1,
+    "pruneSampleRepeats":0,
+
+    "use_variance":false,
+    "perm":true
+}

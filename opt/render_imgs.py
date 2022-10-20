@@ -113,7 +113,7 @@ dset = datasets[args.dataset_type](args.data_dir, split="test_train" if args.tra
 
 tree = svox.N3Tree.load(args.ckpt, device=device)
 render = svox.VolumeRenderer(
-    tree, step_size=1e-5, density_softplus=True, ndc=dset.ndc_coeffs)
+    tree, step_size=1e-5, density_softplus=True)
 
 # if tree.use_background:
 #     if args.nobg:
