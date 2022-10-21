@@ -909,6 +909,28 @@ __global__ void render_image_kernel(
 }
 
 template <typename scalar_t>
+__global__ void reweight_image_kernel(
+    PackedTreeSpec<scalar_t> tree,
+    PackedCameraSpec<scalar_t> cam,
+    RenderOptions opt,
+    torch::PackedTensorAccessor32<scalar_t, 2, torch::RestrictPtrTraits>
+        error) {
+    CUDA_GET_THREAD_ID(tid, cam.width * cam.height);
+    int iy = tid / cam.width, ix = tid % cam.width;
+    scalar_t dir[3], origin[3];
+    cam2world_ray(ix, iy, dir, origin, cam);
+    scalar_t vdir[3] = {dir[0], dir[1], dir[2]};
+    maybe_world2ndc(opt, dir, origin);
+
+    transform_coord<scalar_t>(origin, tree.offset, tree.scaling);
+    reweight_ray<scalar_t>(
+        tree,
+        SingleRaySpec<scalar_t>{origin, dir, vdir},
+        opt,
+        error[iy][ix]);
+}
+
+template <typename scalar_t>
 __global__ void render_image_backward_kernel(
     PackedTreeSpec<scalar_t> tree,
     const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits>
@@ -1145,7 +1167,25 @@ void reweight_rays(TreeSpec& tree, RaysSpec& rays, RenderOptions& opt, torch::Te
     CUDA_CHECK_ERRORS;
 }
 
+void reweight_image(TreeSpec& tree, CameraSpec& cam, RenderOptions& opt, torch::Tensor error) {
+    tree.check();
+    rays.check();
+    // CHECK_INPUT(error);
+    // TORCH_CHECK(error.is_floating_point());
+    DEVICE_GUARD(tree.data);
+    const size_t Q = size_t(cam.width) * cam.height;
+    // TORCH_CHECK(Q == error.size(0));
 
+    auto_cuda_threads();
+    const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
+    AT_DISPATCH_FLOATING_TYPES(rays.origins.type(), __FUNCTION__, [&] {
+            device::reweight_image_kernel<scalar_t><<<blocks, cuda_n_threads>>>(
+                    tree, rays, opt, 
+                    error.packed_accessor32<scalar_t, 2, torch::RestrictPtrTraits>()
+                    );
+    });
+    CUDA_CHECK_ERRORS;
+}
 
 torch::Tensor volume_render_image(TreeSpec& tree, CameraSpec& cam, RenderOptions& opt) {
     tree.check();

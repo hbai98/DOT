@@ -51,6 +51,7 @@ Tensor volume_render_backward(TreeSpec&, RaysSpec&, RenderOptions&, Tensor);
 Tensor volume_render_image_backward(TreeSpec&, CameraSpec&, RenderOptions&,
                                     Tensor);
 void reweight_rays(TreeSpec&, RaysSpec&, RenderOptions&, Tensor);
+void reweight_image(TreeSpec&, CameraSpec&, RenderOptions&, Tensor);
             
 
 std::tuple<Tensor, Tensor, Tensor> se_grad(TreeSpec&, RaysSpec&, Tensor,
@@ -115,6 +116,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("volume_render_image_backward", &volume_render_image_backward);
 
     m.def("reweight_rays", &reweight_rays);
+    m.def("reweight_image", &reweight_image);
+
 
     m.def("se_grad", &se_grad);
     m.def("se_grad_persp", &se_grad_persp);

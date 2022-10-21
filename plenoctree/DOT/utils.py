@@ -20,7 +20,7 @@ def reweight_rays(tree, rays, error, opt):
 
 def prune_func(DOT, instant_weights, 
                thresh_type='weight', 
-               thresh_val=1e-3,
+               thresh_val=1,
                thresh_tol=0.8,
                summary_writer=None,
                gstep_id = None

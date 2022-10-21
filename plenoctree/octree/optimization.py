@@ -79,7 +79,7 @@ flags.DEFINE_integer(
     'validation interval')
 flags.DEFINE_integer(
     'num_epochs',
-    80,
+    20,
     'epochs to train for')
 flags.DEFINE_integer(
     'drop_dot',
@@ -87,7 +87,7 @@ flags.DEFINE_integer(
     'epoch to drop DOT')
 flags.DEFINE_integer(
     'thred_count',
-    3,
+    2,
     'number for tolerance check'
 )
 flags.DEFINE_bool(
@@ -115,7 +115,7 @@ flags.DEFINE_float(
 
 flags.DEFINE_float(
     "stable_thred",
-    5e-5,
+    1e-3,
     'check if the structure is stable'
 )
 
@@ -206,6 +206,7 @@ def main(unused_argv):
         ndc_config = svox.NDCConfig(width=W, height=H, focal=focal)
     else:
         ndc_config = None
+    
     r = svox.VolumeRenderer(t, step_size=FLAGS.renderer_step_size, ndc=ndc_config)
 
     if FLAGS.sgd:
@@ -242,14 +243,15 @@ def main(unused_argv):
             summary_writer.add_scalar(
                 f'test/tpsnr', tpsnr, i)             
             return tpsnr
-
+        
+    r = svox.VolumeRenderer(t, step_size=FLAGS.renderer_step_size, ndc=ndc_config)
     best_validation_psnr = run_test_step(0)
     print('** initial val psnr ', best_validation_psnr)
     best_t = None
     pre_mse = 0
     pre_delta_mse = 0
-    dist_count = 0
     delta_mse_count = 0
+    
     for i in range(FLAGS.num_epochs):
         print('epoch', i)
         tpsnr = 0.0
@@ -290,15 +292,25 @@ def main(unused_argv):
             f'train/hessian_mse', _hessian_mse, i
         )
         pre_mse = all_mse
- 
-        s1 = prune_func(t, s1, summary_writer=summary_writer, gstep_id=i)
-        # sample_func(t, FLAGS.sample_rate, s1)     
-          
         if _hessian_mse <= FLAGS.stable_thred:
             delta_mse_count += 1
         else:
             delta_mse_count = 0
             
+        # if i % FLAGS.val_interval == FLAGS.val_interval - 1 or i == FLAGS.num_epochs - 1:
+        validation_psnr = run_test_step(i + 1)
+        print('** val psnr ', validation_psnr, 'best', best_validation_psnr)
+        if validation_psnr > best_validation_psnr:
+            best_validation_psnr = validation_psnr
+            best_t = t.clone(device='cpu')  # SVOX 0.2.22
+            print('')
+        elif not FLAGS.continue_on_decrease:
+            print('Stop since overfitting')
+            break            
+        
+        s1 = prune_func(t, s1, summary_writer=summary_writer, gstep_id=i)
+        # sample_func(t, FLAGS.sample_rate, s1)   
+        
         if delta_mse_count >= FLAGS.thred_count:
             delta_mse_count = 0
         
@@ -306,20 +318,10 @@ def main(unused_argv):
             f'train/num_nodes', t.n_leaves, i)     
         summary_writer.add_scalar(
             f'train/lr', get_lr(optimizer), i)
-
         
-        if i % FLAGS.val_interval == FLAGS.val_interval - 1 or i == FLAGS.num_epochs - 1:
-            validation_psnr = run_test_step(i + 1)
-            print('** val psnr ', validation_psnr, 'best', best_validation_psnr)
-            if validation_psnr > best_validation_psnr:
-                best_validation_psnr = validation_psnr
-                best_t = t.clone(device='cpu')  # SVOX 0.2.22
-                print('')
-            elif not FLAGS.continue_on_decrease:
-                print('Stop since overfitting')
-                break
-            
 
+  
+          
     if not FLAGS.nosave:
         if best_t is not None:
             print('Saving best model to', FLAGS.output)
