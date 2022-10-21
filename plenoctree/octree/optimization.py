@@ -81,6 +81,15 @@ flags.DEFINE_integer(
     'num_epochs',
     80,
     'epochs to train for')
+flags.DEFINE_integer(
+    'drop_dot',
+    50,
+    'epoch to drop DOT')
+flags.DEFINE_integer(
+    'thred_count',
+    3,
+    'number for tolerance check'
+)
 flags.DEFINE_bool(
     'sgd',
     True,
@@ -103,6 +112,13 @@ flags.DEFINE_float(
     0.05,
     'sampling rate in each epoch'
 )
+
+flags.DEFINE_float(
+    "stable_thred",
+    5e-5,
+    'check if the structure is stable'
+)
+
 
 flags.DEFINE_bool(
     'sgd_nesterov',
@@ -184,7 +200,7 @@ def main(unused_argv):
     os.makedirs(vis_dir, exist_ok=True)
 
     print('N3Tree load')
-    t = svox.N3Tree.load(FLAGS.input, map_location=device)
+    t = DOT_N3Tree.load(FLAGS.input, map_location=device)
 
     if 'llff' in FLAGS.config:
         ndc_config = svox.NDCConfig(width=W, height=H, focal=focal)
@@ -230,10 +246,10 @@ def main(unused_argv):
     best_validation_psnr = run_test_step(0)
     print('** initial val psnr ', best_validation_psnr)
     best_t = None
-    # pre_mse = 0
-    # pre_delta_mse = 0
+    pre_mse = 0
+    pre_delta_mse = 0
     dist_count = 0
-    pre_dis = 0
+    delta_mse_count = 0
     for i in range(FLAGS.num_epochs):
         print('epoch', i)
         tpsnr = 0.0
@@ -266,9 +282,25 @@ def main(unused_argv):
         print('** train_psnr', tpsnr)
         summary_writer.add_scalar(
             f'train/train_psnr', tpsnr, i) 
-    
-        dist_count, pre_dis = prune_func(t, s1, dist_count, pre_dis, summary_writer=summary_writer, gstep_id=i)
-        sample_func(t, FLAGS.sample_rate, s1)
+
+        delta_mse = all_mse-pre_mse
+        abs_dmse = np.abs(delta_mse)
+        _hessian_mse = np.abs(abs_dmse-pre_delta_mse)
+        summary_writer.add_scalar(
+            f'train/hessian_mse', _hessian_mse, i
+        )
+        pre_mse = all_mse
+ 
+        s1 = prune_func(t, s1, summary_writer=summary_writer, gstep_id=i)
+        # sample_func(t, FLAGS.sample_rate, s1)     
+          
+        if _hessian_mse <= FLAGS.stable_thred:
+            delta_mse_count += 1
+        else:
+            delta_mse_count = 0
+            
+        if delta_mse_count >= FLAGS.thred_count:
+            delta_mse_count = 0
         
         summary_writer.add_scalar(
             f'train/num_nodes', t.n_leaves, i)     
@@ -287,10 +319,7 @@ def main(unused_argv):
                 print('Stop since overfitting')
                 break
             
-        # delta_mse = all_mse-pre_mse
-        # abs_dmse = np.abs(delta_mse)
-        # _hessian_mse = np.abs(abs_dmse-pre_delta_mse)
-        # pre_mse = all_mse
+
     if not FLAGS.nosave:
         if best_t is not None:
             print('Saving best model to', FLAGS.output)

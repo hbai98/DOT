@@ -33,7 +33,7 @@
     "sigma_thresh":1e-8,
     "stop_thresh":0,
     "thresh_type":"weight",
-    "thresh_method":"triangle",
+    "thresh_method":"sigma",
     "thresh_val":0.25,
     "thresh_gaussian_sigma":3,
     "thresh_tol":0.9,

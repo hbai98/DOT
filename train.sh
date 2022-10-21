@@ -12,7 +12,6 @@ nvidia-smi
 module load anaconda3
 module load cuda-11.4
 source activate
-conda activate Adnerf
 
 # experiment_name=mcots/test/init
 # config=opt/configs/DOT/syn.json
@@ -29,6 +28,7 @@ conda activate Adnerf
 # # python -m unittest test.test_mcots.TestMCOTS.test_run_a_round
 # python opt/opt.py -t $CKPT_DIR ${data_dir} -c ${config} -p ${pre_dir} > $NOHUP_FILE 2>&1  
 # echo DETACH
+conda activate Adnerf
 
 
 export DATA_ROOT=/hy-tmp/nerf_synthetic
