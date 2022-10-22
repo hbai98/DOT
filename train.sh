@@ -32,7 +32,7 @@ conda activate Adnerf
 
 
 export DATA_ROOT=/hy-tmp/nerf_synthetic
-export CKPT_ROOT=/hy-tmp/checkpoints
+export CKPT_ROOT=/hy-tmp/checkpoints/
 export pre_dir=/hy-tmp/syn_sh16_octrees/oct_drums_sgd1e7_asthre0_1_rad1_4_sample256
 export SCENE=drums
 export CONFIG_FILE=nerf_sh/config/blender
@@ -41,4 +41,4 @@ python -m octree.optimization \
     --input $pre_dir/tree.npz \
     --config $CONFIG_FILE \
     --data_dir $DATA_ROOT/$SCENE/ \
-    --output $CKPT_ROOT/$SCENE/tree_opt.npz
+    --output $CKPT_ROOT/$SCENE/tree_opt_orig.npz

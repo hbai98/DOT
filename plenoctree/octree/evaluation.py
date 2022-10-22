@@ -42,7 +42,6 @@ from absl import flags
 from tqdm import tqdm
 import imageio
 
-from octree.nerf import models
 from octree.nerf import utils
 from octree.nerf import datasets
 

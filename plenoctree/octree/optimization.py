@@ -297,16 +297,20 @@ def main(unused_argv):
         else:
             delta_mse_count = 0
             
+       
         # if i % FLAGS.val_interval == FLAGS.val_interval - 1 or i == FLAGS.num_epochs - 1:
-        validation_psnr = run_test_step(i + 1)
-        print('** val psnr ', validation_psnr, 'best', best_validation_psnr)
-        if validation_psnr > best_validation_psnr:
+        if i==2:
+            validation_psnr = run_test_step(i + 1)
+            print('** val psnr ', validation_psnr, 'best', best_validation_psnr)
+            # if validation_psnr > best_validation_psnr:
             best_validation_psnr = validation_psnr
             best_t = t.clone(device='cpu')  # SVOX 0.2.22
+            best_t.save(FLAGS.output, compress=False)
             print('')
-        elif not FLAGS.continue_on_decrease:
-            print('Stop since overfitting')
-            break            
+            assert 0
+            # elif not FLAGS.continue_on_decrease:
+            #     print('Stop since overfitting')
+            #     break            
         
         s1 = prune_func(t, s1, summary_writer=summary_writer, gstep_id=i)
         # sample_func(t, FLAGS.sample_rate, s1)   
