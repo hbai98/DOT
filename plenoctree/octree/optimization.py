@@ -43,7 +43,7 @@ import imageio
 import os.path as osp
 import os
 from tqdm import tqdm
-from torch.optim import SGD, Adam
+from torch.optim import SGD, AdamW
 from warnings import warn
 
 from absl import app
@@ -75,7 +75,7 @@ flags.DEFINE_integer(
     'render interval')
 flags.DEFINE_integer(
     'val_interval',
-    2,
+    1,
     'validation interval')
 flags.DEFINE_integer(
     'num_epochs',
@@ -87,35 +87,39 @@ flags.DEFINE_integer(
     'epoch to drop DOT')
 flags.DEFINE_integer(
     'thred_count',
-    2,
+    3,
     'number for tolerance check'
 )
-flags.DEFINE_bool(
-    'sgd',
-    True,
-    'use SGD optimizer instead of Adam')
+flags.DEFINE_integer(
+    'depth_limit',
+    15,
+    'number for tolerance check'
+)
+# flags.DEFINE_bool(
+#     'sgd',
+#     False,
+#     'use SGD optimizer instead of Adam')
 flags.DEFINE_float(
-    'lr',
-    1e7,
+    'lr_sigma',
+    1e0,
+    'optimizer step size')
+flags.DEFINE_float(
+    'lr_sh',
+    1e-1,
     'optimizer step size')
 flags.DEFINE_float(
     'sgd_momentum',
     0.0,
     'sgd momentum')
 flags.DEFINE_float(
-    "mse_weight",
-    1,
-    'mse weight for postierior calibration'
-)
-flags.DEFINE_float(
     "sample_rate",
-    0.05,
+    0.01,
     'sampling rate in each epoch'
 )
 
 flags.DEFINE_float(
     "stable_thred",
-    1e-3,
+    5e-5,
     'check if the structure is stable'
 )
 
@@ -164,6 +168,8 @@ flags.DEFINE_bool(
 
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
+# device = "cuda" 
+
 torch.autograd.set_detect_anomaly(True)
 
 def main(unused_argv):
@@ -201,6 +207,7 @@ def main(unused_argv):
 
     print('N3Tree load')
     t = DOT_N3Tree.load(FLAGS.input, map_location=device)
+    t.set_depth_limit(FLAGS.depth_limit)
 
     if 'llff' in FLAGS.config:
         ndc_config = svox.NDCConfig(width=W, height=H, focal=focal)
@@ -209,16 +216,16 @@ def main(unused_argv):
     
     r = svox.VolumeRenderer(t, step_size=FLAGS.renderer_step_size, ndc=ndc_config)
 
-    if FLAGS.sgd:
-        print('Using SGD, lr', FLAGS.lr)
-        if FLAGS.lr < 1.0:
-            warn('For SGD please adjust LR to about 1e7')
-        optimizer = SGD(t.parameters(), lr=FLAGS.lr, momentum=FLAGS.sgd_momentum,
-                        nesterov=FLAGS.sgd_nesterov)
-    else:
-        adam_eps = 1e-4 if t.data.dtype is torch.float16 else 1e-8
-        print('Using Adam, eps', adam_eps, 'lr', FLAGS.lr)
-        optimizer = Adam(t.parameters(), lr=FLAGS.lr, eps=adam_eps)
+    # if FLAGS.sgd:
+    #     print('Using SGD, lr', FLAGS.lr)
+    #     if FLAGS.lr < 1.0:
+    #         warn('For SGD please adjust LR to about 1e7')
+    #     optimizer = SGD(t.parameters(), lr=FLAGS.lr, momentum=FLAGS.sgd_momentum,
+    #                     nesterov=FLAGS.sgd_nesterov)
+    # else:
+    #     adam_eps = 1e-4 if t.data.dtype is torch.float16 else 1e-8
+    #     print('Using Adam, eps', adam_eps, 'lr', FLAGS.lr)
+    #     optimizer = AdamW(t.parameters(), lr=FLAGS.lr, eps=adam_eps)
 
     n_train_imgs = len(train_c2w)
     n_test_imgs = len(test_c2w)
@@ -228,7 +235,7 @@ def main(unused_argv):
         with torch.no_grad():
             tpsnr = 0.0
             for j, (c2w, im_gt) in enumerate(zip(test_c2w, test_gt)):
-                im = r.render_persp(c2w, height=H, width=W, fx=focal, fast=False)
+                im = r.render_persp(c2w, height=H, width=W, fx=focal, fast=False, cuda=True)
                 im = im.cpu().clamp_(0.0, 1.0)
 
                 mse = ((im - im_gt) ** 2).mean()
@@ -239,18 +246,21 @@ def main(unused_argv):
                     vis = torch.cat((im_gt, im), dim=1)
                     vis = (vis * 255).numpy().astype(np.uint8)
                     imageio.imwrite(f"{vis_dir}/{i:04}_{j:04}.png", vis)
+            
             tpsnr /= n_test_imgs
             summary_writer.add_scalar(
-                f'test/tpsnr', tpsnr, i)             
+                f'test/psnr', tpsnr, i)             
             return tpsnr
         
     r = svox.VolumeRenderer(t, step_size=FLAGS.renderer_step_size, ndc=ndc_config)
     best_validation_psnr = run_test_step(0)
     print('** initial val psnr ', best_validation_psnr)
     best_t = None
-    pre_mse = 0
-    pre_delta_mse = 0
-    delta_mse_count = 0
+    # pre_mse = 0
+    # delta_mse_count = 0
+    # prune =False
+    # pre_delta_mse = 0
+    count = 0
     
     for i in range(FLAGS.num_epochs):
         print('epoch', i)
@@ -258,78 +268,91 @@ def main(unused_argv):
         s1 = torch.zeros_like(t.child, dtype=t.data.dtype)  # E(x)
         all_mse = np.zeros(1)
         for j, (c2w, im_gt) in tqdm(enumerate(zip(train_c2w, train_gt)), total=n_train_imgs):
-            with t.accumulate_weights(op="sum") as accum:
-                im = r.render_persp(c2w, height=H, width=W, fx=focal, cuda=True)
-            # dif = im-im_gt
-            # error = flags.mse_weight*(dif*dif).sum(-1)
-            # weight = reweight_rays(b_rays, error, render._get_options())
+            # with t.accumulate_weights(op="sum") as accum:
+            im = r.render_persp(c2w, height=H, width=W, fx=focal, cuda=True)
+            dif = im-im_gt.to(device)
+            error = (dif*dif).sum(-1)
+            weight = reweight_image(t, error, c2w, r._get_options(), width=W, height=H, fx=focal)
             with torch.no_grad():
-                s1 += accum.value
+                # s1 += accum.value
+                s1 += weight
             im_gt_ten = im_gt.to(device=device)
             im = torch.clamp(im, 0.0, 1.0)
             mse = ((im - im_gt_ten) ** 2).mean()
             im_gt_ten = None
 
-            optimizer.zero_grad()
-            t.data.grad = None  # This helps save memory weirdly enough
+            # optimizer.zero_grad()
+            # t.data.grad = None  # This helps save memory weirdly enough
             mse.backward()
-            optimizer.step()
+            t.optim_basis_all_step(FLAGS.lr_sigma, FLAGS.lr_sh)
+            # optimizer.step()
             mse_val = mse.detach().cpu()
             if mse_val < 0:
                 assert False, 'Invalid mse'
             all_mse += mse_val.item()
             psnr = -10.0 * np.log(mse_val) / np.log(10.0)
             tpsnr += psnr.item()
+            
         tpsnr /= n_train_imgs
         print('** train_psnr', tpsnr)
         summary_writer.add_scalar(
             f'train/train_psnr', tpsnr, i) 
 
-        delta_mse = all_mse-pre_mse
-        abs_dmse = np.abs(delta_mse)
-        _hessian_mse = np.abs(abs_dmse-pre_delta_mse)
-        summary_writer.add_scalar(
-            f'train/hessian_mse', _hessian_mse, i
-        )
-        pre_mse = all_mse
-        if _hessian_mse <= FLAGS.stable_thred:
-            delta_mse_count += 1
-        else:
-            delta_mse_count = 0
-            
+        # delta_mse = all_mse-pre_mse
+        # abs_dmse = np.abs(delta_mse)
+        # _hessian_mse = np.abs(abs_dmse-pre_delta_mse)
+        # pre_delta_mse = abs_dmse
+        # summary_writer.add_scalar(
+        #     f'train/delta_mse', abs_dmse, i
+        # )
+        # summary_writer.add_scalar(
+        #     f'train/hessian_mse', _hessian_mse, i
+        # )        
+        # pre_mse = all_mse
        
-        # if i % FLAGS.val_interval == FLAGS.val_interval - 1 or i == FLAGS.num_epochs - 1:
-        if i==2:
+        if i % FLAGS.val_interval == FLAGS.val_interval - 1 or i == FLAGS.num_epochs - 1:
             validation_psnr = run_test_step(i + 1)
             print('** val psnr ', validation_psnr, 'best', best_validation_psnr)
-            # if validation_psnr > best_validation_psnr:
-            best_validation_psnr = validation_psnr
-            best_t = t.clone(device='cpu')  # SVOX 0.2.22
-            best_t.save(FLAGS.output, compress=False)
-            print('')
-            assert 0
-            # elif not FLAGS.continue_on_decrease:
-            #     print('Stop since overfitting')
-            #     break            
+            if validation_psnr > best_validation_psnr:
+                best_validation_psnr = validation_psnr
+                best_t = t.clone(device='cpu')# SVOX 0.2.22
+                # best_t.save(FLAGS.output+'best.npz', compress=False)
+                print('')
+            elif not FLAGS.continue_on_decrease:
+                print('Stop since overfitting')
+                break
+            
+            if i == FLAGS.num_epochs - 1:
+                print('Save last')
+                # name = FLAGS.output
+                t.save(FLAGS.output, compress=False)     
         
-        s1 = prune_func(t, s1, summary_writer=summary_writer, gstep_id=i)
-        # sample_func(t, FLAGS.sample_rate, s1)   
-        
-        if delta_mse_count >= FLAGS.thred_count:
-            delta_mse_count = 0
+        # s1 = prune_func(t, s1, summary_writer=summary_writer, gstep_id=i, thresh_val=1e-2)
+        # if _hessian_mse <= FLAGS.stable_thred:
+        #     delta_mse_count += 1
+        # else:
+        #     delta_mse_count = 0   
+        prune_func(t, s1, summary_writer=summary_writer, gstep_id=i, thresh_val=1e-3)
+        sample_func(t, FLAGS.sample_rate, s1)
+        # if count == 0:
+        #      prune_func(t, s1, summary_writer=summary_writer, gstep_id=i, thresh_val=1e-3)
+        # count += 1
+        # # if delta_mse_count >= FLAGS.thred_count:
+        # if count > 11:
+        #     s1 = prune_func(t, s1, summary_writer=summary_writer, gstep_id=i, thresh_val=1e-3)
+        #     sample_func(t, FLAGS.sample_rate, s1)  
+        #     count = 1
+        #     # delta_mse_count = 0
         
         summary_writer.add_scalar(
             f'train/num_nodes', t.n_leaves, i)     
-        summary_writer.add_scalar(
-            f'train/lr', get_lr(optimizer), i)
+        # summary_writer.add_scalar(
+        #     f'train/lr', get_lr(optimizer), i)
         
-
-  
-          
     if not FLAGS.nosave:
         if best_t is not None:
             print('Saving best model to', FLAGS.output)
-            best_t.save(FLAGS.output, compress=False)
+            best_t.save(FLAGS.output+'best.npz', compress=False)
         else:
             print('Did not improve upon initial model')
 

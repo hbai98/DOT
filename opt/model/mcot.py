@@ -626,6 +626,8 @@ class MCOT(nn.Module):
             data.data -= data.grad
         else:
             raise NotImplementedError(f'Unsupported optimizer {optim}')
+        
+        data.grad.zero_()
 
     def _sigma(self):
         sel = (*self.tree._all_leaves().long().T, )

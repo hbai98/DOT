@@ -1169,7 +1169,7 @@ void reweight_rays(TreeSpec& tree, RaysSpec& rays, RenderOptions& opt, torch::Te
 
 void reweight_image(TreeSpec& tree, CameraSpec& cam, RenderOptions& opt, torch::Tensor error) {
     tree.check();
-    rays.check();
+    cam.check();
     // CHECK_INPUT(error);
     // TORCH_CHECK(error.is_floating_point());
     DEVICE_GUARD(tree.data);
@@ -1178,9 +1178,9 @@ void reweight_image(TreeSpec& tree, CameraSpec& cam, RenderOptions& opt, torch::
 
     auto_cuda_threads();
     const int blocks = CUDA_N_BLOCKS_NEEDED(Q, cuda_n_threads);
-    AT_DISPATCH_FLOATING_TYPES(rays.origins.type(), __FUNCTION__, [&] {
+    AT_DISPATCH_FLOATING_TYPES(tree.data.type(), __FUNCTION__, [&] {
             device::reweight_image_kernel<scalar_t><<<blocks, cuda_n_threads>>>(
-                    tree, rays, opt, 
+                    tree, cam, opt, 
                     error.packed_accessor32<scalar_t, 2, torch::RestrictPtrTraits>()
                     );
     });

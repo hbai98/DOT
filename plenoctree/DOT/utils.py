@@ -1,5 +1,6 @@
+import numpy as np
 from svox.svox import _get_c_extension
-from svox.renderer import _rays_spec_from_rays
+from svox.renderer import _rays_spec_from_rays, _make_camera_spec
 import torch
 from skimage.filters.thresholding import threshold_li, threshold_otsu, threshold_yen, threshold_minimum, threshold_triangle
 from skimage.filters._gaussian import gaussian
@@ -18,9 +19,20 @@ def reweight_rays(tree, rays, error, opt):
         _C.reweight_rays(tree._spec(), _rays_spec_from_rays(rays), opt, error)
     return accum.value 
 
+def reweight_image(tree, error, c2w, opt, width=800, height=800, fx=1111.111, fy=None):
+    assert error.is_cuda
+    tree._weight_accum = None
+    if fy is None:
+        fy = fx
+    with tree.accumulate_weights(op="sum") as accum:
+        _C.reweight_image(tree._spec(), _make_camera_spec(c2w.to(dtype=tree.data.dtype),
+                              width, height, fx, fy), opt, error
+                          )
+    return accum.value
+
 def prune_func(DOT, instant_weights, 
                thresh_type='weight', 
-               thresh_val=1,
+               thresh_val=5e-3,
                thresh_tol=0.8,
                summary_writer=None,
                gstep_id = None
@@ -60,7 +72,7 @@ def prune_func(DOT, instant_weights,
             pre_sel = sel_nids
             DOT.merge_nids(sel_nids)
             # DOT.shrink_to_fit()
-            n = len(sel_nids)*DOT.N ** 3
+            n = len(sel_nids)*(DOT.N ** 3 - 1)
             toltal += n
             print(f'Prune {n}/{leaves.size(0)}')
             
@@ -87,26 +99,23 @@ def sample_func(tree, sampling_rate, VAL, repeats=1):
     with torch.no_grad():
         val, leaves = update_val_leaves(tree, VAL)
         sample_k = int(max(1, tree.n_leaves*sampling_rate))
-        print(f'Start sampling {sample_k} nodes.')
-        idxs = select(tree, sample_k, val, leaves)
+        delta = sample_k*tree.N**3
+        print(f'Start sampling {sample_k} nodes, and increase {delta} nodes.')
+        idxs = select(sample_k, val, leaves)
         interval = idxs.size(0)//repeats
+        
         for i in range(1, repeats+1):
             start = (i-1)*interval
             end = i*interval
             sel = idxs[start:end]
-            continue_ = expand(tree, sel, i)
-            if not continue_:
-                return False
-    return True 
+            expand(tree, sel, i)
 
 def expand(tree, idxs, repeats):
     # group expansion
-    i = idxs.size(0)
-    idxs = (*idxs.long().T,)
-    res = tree.refine(sel=idxs, repeats=repeats)
-    return res
+    sel = (*idxs.long().T,)
+    tree.refine(sel=sel, repeats=repeats)
         
-def select(t, max_sel, reward, rw_idxs):
+def select(max_sel, reward, rw_idxs):
     p_val = reward  # only MSE
     sel = min(p_val.size(0), max_sel)
     _, idxs = torch.topk(p_val, sel)
@@ -128,7 +137,6 @@ def threshold(data, method, sigma=3):
         return torch.tensor(threshold_triangle(data), device=device)
     else:
         assert False, f'the method {method} is not implemented.'
-
 
 def get_lr(optimizer):
     for param_group in optimizer.param_groups:
@@ -191,7 +199,7 @@ class DOT_N3Tree(N3Tree):
             for i in range(1, init_refine + 1):
                 init_reserve += (N ** i) ** 3
 
-    
+        self.basis_rms = None
         self.register_parameter("data",
                         nn.Parameter(torch.empty(init_reserve, N, N, N, self.data_dim, dtype=dtype, device=device)))
         nn.init.constant_(self.data, 0.01)
@@ -276,76 +284,95 @@ class DOT_N3Tree(N3Tree):
         idxs = [f in nids for f in self._frontier]
         self.merge(idxs)    
     
-    def refine(self, repeats=1, sel=None):
-        """
-        Refine each selected leaf node, respecting depth_limit.
-
-        :param repeats: int number of times to repeat refinement
-        :param sel: :code:`(N, 4)` node selector. Default selects all leaves.
-
-        :return: True iff N3Tree.data parameter was resized, requiring
-                 optimizer reinitialization if you're using an optimizer
-
-        .. warning::
-            The parameter :code:`tree.data` can change due to refinement. If any refine() call returns True, please re-make any optimizers
-            using :code:`tree.params()`.
-
-        .. warning::
-            The selector :code:`sel` is assumed to contain unique leaf indices. If there are duplicates
-            memory will be wasted. We do not dedup here for efficiency reasons.
-
-        """
-        if self._lock_tree_structure:
-            raise RuntimeError("Tree locked")
-        with torch.no_grad():
-            resized = False
-            for repeat_id in range(repeats):
-                filled = self.n_internal
-                if sel is None:
-                    # Default all leaves
-                    sel = (*self._all_leaves().T,)
-                depths = self.parent_depth[sel[0], 1]
-                # Filter by depth & leaves
-                good_mask = (depths < self.depth_limit) & (self.child[sel] == 0)
-                sel = [t[good_mask] for t in sel]
-                leaf_node =  torch.stack(sel, dim=-1).to(device=self.data.device)
-                num_nc = len(sel[0])
-                if num_nc == 0:
-                    # Nothing to do
-                    return False
-                new_filled = filled + num_nc
-
-                cap_needed = new_filled - self.capacity
-                if cap_needed > 0:
-                    resized = self._resize_add_cap(cap_needed)
-                    # resized = True
-                    if not resized:
-                        return resized
-
-                new_idxs = torch.arange(filled, filled + num_nc,
-                        device=leaf_node.device, dtype=self.child.dtype) # NNC
-
-                self.child[filled:new_filled] = 0
-                self.child[sel] = new_idxs - leaf_node[:, 0].to(torch.int32)
-                self.data.data[filled:new_filled] = self.data.data[
-                        sel][:, None, None, None]
-                self.parent_depth[filled:new_filled, 0] = self._pack_index(leaf_node)  # parent
-                self.parent_depth[filled:new_filled, 1] = self.parent_depth[
-                        leaf_node[:, 0], 1] + 1  # depth
-
-                if repeat_id < repeats - 1:
-                    # Infer new selector
-                    t1 = torch.arange(filled, new_filled,
-                            device=self.data.device).repeat_interleave(self.N ** 3)
-                    rangen = torch.arange(self.N, device=self.data.device)
-                    t2 = rangen.repeat_interleave(self.N ** 2).repeat(
-                            new_filled - filled)
-                    t3 = rangen.repeat_interleave(self.N).repeat(
-                            (new_filled - filled) * self.N)
-                    t4 = rangen.repeat((new_filled - filled) * self.N ** 2)
-                    sel = (t1, t2, t3, t4)
-                self._n_internal += num_nc
-        if repeats > 0:
-            self._invalidate()
-        return resized
+    def set_depth_limit(self, depth):
+        self.depth_limit = depth
     
+    def optim_basis_all_step(self, lr_sigma: float, lr_sh: float, beta: float = 0.9, epsilon: float = 1e-8,
+                             optim: str = 'rmsprop'):
+        """
+        Execute RMSprop/SGD step on SH
+        """
+
+        data = self.data
+
+        assert (
+            _C is not None and data.is_cuda
+        ), "CUDA extension is currently required for optimizers"
+
+        if optim == 'rmsprop':
+            if self.basis_rms is None or self.basis_rms.shape != data.shape:
+                del self.basis_rms
+                self.basis_rms = torch.zeros_like(data.data)
+            self.basis_rms.mul_(beta).addcmul_(
+                data.grad, data.grad, value=1.0 - beta)
+            denom = self.basis_rms.sqrt().add_(epsilon)
+            data.data[..., -1].addcdiv_(data.grad[..., -1],
+                                        denom[..., -1], value=-lr_sigma)
+            data.data[..., :-1].addcdiv_(data.grad[..., :-1],
+                                         denom[..., :-1], value=-lr_sh)
+
+        elif optim == 'sgd':
+            data.grad[..., -1].mul_(lr_sigma)
+            data.grad[..., :-1].mul_(lr_sh)
+            data.data -= data.grad
+        else:
+            raise NotImplementedError(f'Unsupported optimizer {optim}')
+        
+        data.grad.zero_()
+    @classmethod
+    def load(cls, path, device='cpu', dtype=torch.float32, map_location=None):
+        """
+        Load from npz file
+
+        :param path: npz path
+        :param device: str device to put data
+        :param dtype: str torch.float32 (default) | torch.float64
+        :param map_location: str DEPRECATED old name for device
+
+        """
+        if map_location is not None:
+            warn('map_location has been renamed to device and may be removed')
+            device = map_location
+        assert dtype == torch.float32 or dtype == torch.float64, 'Unsupported dtype'
+        tree = cls(dtype=dtype, device=device)
+        z = np.load(path)
+        tree.data_dim = int(z["data_dim"])
+        tree.child = torch.from_numpy(z["child"]).to(device)
+        tree.N = tree.child.shape[-1]
+        tree.parent_depth = torch.from_numpy(z["parent_depth"]).to(device)
+        tree._n_internal.fill_(z["n_internal"].item())
+        if "invradius3" in z.files:
+            tree.invradius = torch.from_numpy(z["invradius3"].astype(
+                                np.float32)).to(device)
+        else:
+            tree.invradius.fill_(z["invradius"].item())
+        tree.offset = torch.from_numpy(z["offset"].astype(np.float32)).to(device)
+        tree.depth_limit = int(z["depth_limit"])
+        tree.geom_resize_fact = float(z["geom_resize_fact"])
+        tree.data.data = torch.from_numpy(z["data"].astype(np.float32)).to(device)
+        if 'n_free' in z.files:
+            tree._n_free.fill_(z["n_free"].item())
+        else:
+            tree._n_free.zero_()
+        tree.data_format = DataFormat(z['data_format'].item()) if \
+                'data_format' in z.files else None
+        tree.extra_data = torch.from_numpy(z['extra_data']).to(device) if \
+                          'extra_data' in z.files else None
+        return tree        
+def vis_dif(path_1, path_2, out_path):
+    m1 = DOT_N3Tree.load(path_1, map_location="cuda")
+    m2 = DOT_N3Tree.load(path_2, map_location="cuda")
+    s1 = m1.data.size(0)
+    s2 = m2.data.size(0)
+    
+    if s1 >= s2:
+        m = m1.clone("cpu")
+        dif = m1.data.data - m2.data.data
+    else:
+        m = m2.clone("cpu")
+        dif = m2.data.data - m1.data.data
+    
+    m = m.to("cuda")
+    m.data.data = dif
+    m.save(out_path)
+

@@ -9,9 +9,11 @@
 #BSUB -W 48:00
 
 module load anaconda3
-module load cuda-11.3
+module load cuda-11.4
 source activate
 conda activate Adnerf
 
-pip install .
+cd svox 
+
+python setup.py install
 
