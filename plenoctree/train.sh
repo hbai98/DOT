@@ -29,16 +29,26 @@ source activate
 # echo DETACH
 conda activate Adnerf
 
+export THS_TYPE=weight
+export THS_VAL=1e-3
+
 export DATA_ROOT=../data/nerf_synthetic
-export CKPT_ROOT=../checkpoints/post/sample/init
-export pre_dir=../checkpoints/checkpoints/syn_sh16/drums/drums/octrees
+export CKPT_ROOT=../checkpoints/DOT
+export pre_dir=../checkpoints/plenoctree/syn_sh16/drums/drums/octrees
 export SCENE=drums
 export CONFIG_FILE=nerf_sh/config/blender
+export OUT_NAME=tree_shrink_post_val_1e-3_weight_10e.npz
+export epochs=10
+# export postier=false
 
 python -m octree.optimization \
     --input $pre_dir/tree.npz \
     --config $CONFIG_FILE \
     --data_dir $DATA_ROOT/$SCENE/ \
-    --output $CKPT_ROOT/tree_orig.npz
+    --output $CKPT_ROOT/$SCENE/$OUT_NAME \
+    --thresh_type $THS_TYPE \
+    --thresh_val $THS_VAL \
+    --num_epochs $epochs \ 
+    --use_postierior 
 
 # 11074519

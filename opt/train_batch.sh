@@ -1,8 +1,8 @@
 #!/bin/sh		
 #BSUB -J nerf
-#BSUB -n 16    
+#BSUB -n 4   
 #BSUB -q gpu         
-#BSUB -gpgpu 4
+#BSUB -gpgpu 1
 #BSUB -o out.%J      
 #BSUB -e err.%J  
 #BSUB -W 48:00
@@ -14,5 +14,5 @@ module load cuda-11.4
 source activate
 conda activate Adnerf
 
-python autotune.py -g '0 ' tasks/eval.json
+python autotune.py -g '0' tasks/eval.json
 # python autotune.py  tasks/eval.json

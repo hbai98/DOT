@@ -599,10 +599,11 @@ class MCOT(nn.Module):
     def optim_basis_all_step(self, lr_sigma: float, lr_sh: float, beta: float = 0.9, epsilon: float = 1e-8,
                              optim: str = 'rmsprop'):
         """
-        Execute RMSprop/SGD step on SH
+        Execute RMSprop/SGD step on leaves
         """
-
-        data = self.tree.data
+        sel = self.tree._all_leaves()
+        sel = (*sel.long().T, )
+        data = self.tree.data[sel]
 
         assert (
             _C is not None and data.is_cuda

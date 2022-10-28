@@ -5,7 +5,6 @@ from typing import Optional
 import numpy as np
 from skimage.filters._gaussian import gaussian
 from skimage.filters.thresholding import threshold_li, threshold_otsu, threshold_yen, threshold_minimum, threshold_triangle
-from sklearn import metrics
 
 def mmd_rbf(X, Y, gamma=1.0):
     """MMD using rbf (gaussian) kernel (i.e., k(x,y) = exp(-gamma * ||x-y||^2 / 2))

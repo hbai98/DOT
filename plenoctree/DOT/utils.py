@@ -35,7 +35,8 @@ def prune_func(DOT, instant_weights,
                thresh_val=5e-3,
                thresh_tol=0.8,
                summary_writer=None,
-               gstep_id = None
+               gstep_id = None,
+               recursive=True,
                ):
     non_writer = summary_writer is None
     if not non_writer:
@@ -52,7 +53,6 @@ def prune_func(DOT, instant_weights,
         val = torch.nan_to_num(val, nan=0)
         
         thred = thresh_val
-        pre_sel = None
         toltal = 0 
         while True:
             # smoothed = gaussian(val.cpu().detach().numpy(), sigma=args.thresh_gaussian_sigma)   
@@ -60,17 +60,15 @@ def prune_func(DOT, instant_weights,
             nids, counts = torch.unique(sel[:, 0], return_counts=True)
             # discover the fronts whose all children are included in sel
             mask = (counts >= int(DOT.N**3*thresh_tol)).numpy()
-
             sel_nids = nids[mask]
+            if sel_nids.size(0) == 0 or not DOT.merge_nids(sel_nids):
+                break
             parent_sel = (*DOT._unpack_index(
                 DOT.parent_depth[sel_nids, 0]).long().T,)
-
-            if pre_sel is not None:
-                if sel_nids.size(0) == 0 or torch.equal(pre_sel, sel_nids):
-                    break
-
-            pre_sel = sel_nids
-            DOT.merge_nids(sel_nids)
+            # if pre_sel is not None:
+                # if sel_nids.size(0) == 0 or torch.equal(pre_sel, sel_nids):
+                #     break
+            # pre_sel = sel_nids
             # DOT.shrink_to_fit()
             n = len(sel_nids)*(DOT.N ** 3 - 1)
             toltal += n
@@ -109,6 +107,7 @@ def sample_func(tree, sampling_rate, VAL, repeats=1):
             end = i*interval
             sel = idxs[start:end]
             expand(tree, sel, i)
+        return idxs
 
 def expand(tree, idxs, repeats):
     # group expansion
@@ -277,18 +276,18 @@ class DOT_N3Tree(N3Tree):
                             0, dtype=self.data.dtype, device=self.data.device)
             tree_spec._weight_accum_max = (self._weight_accum_op == 'max')
         return tree_spec    
-    
+                
     def merge_nids(self, nids):
         device = self.data.device
         nids = nids.to(device)
         idxs = [f in nids for f in self._frontier]
-        self.merge(idxs)    
+        return self.merge(idxs)
     
     def set_depth_limit(self, depth):
         self.depth_limit = depth
     
     def optim_basis_all_step(self, lr_sigma: float, lr_sh: float, beta: float = 0.9, epsilon: float = 1e-8,
-                             optim: str = 'rmsprop'):
+                             optim: str = 'rmsprop', rate_sel=1e1, sel=None):
         """
         Execute RMSprop/SGD step on SH
         """
@@ -306,15 +305,23 @@ class DOT_N3Tree(N3Tree):
             self.basis_rms.mul_(beta).addcmul_(
                 data.grad, data.grad, value=1.0 - beta)
             denom = self.basis_rms.sqrt().add_(epsilon)
+            
             data.data[..., -1].addcdiv_(data.grad[..., -1],
                                         denom[..., -1], value=-lr_sigma)
             data.data[..., :-1].addcdiv_(data.grad[..., :-1],
-                                         denom[..., :-1], value=-lr_sh)
-
+                                        denom[..., :-1], value=-lr_sh)
+            if sel is not None:
+                data.data[sel][-1].addcdiv_(data.grad[sel][-1],
+                                        denom[sel][-1], value=-lr_sigma*rate_sel)
+                data.data[sel][:-1].addcdiv_(data.grad[sel][:-1],
+                                        denom[sel][:-1], value=-lr_sh*rate_sel) 
         elif optim == 'sgd':
             data.grad[..., -1].mul_(lr_sigma)
             data.grad[..., :-1].mul_(lr_sh)
             data.data -= data.grad
+            if sel is not None:
+                data.grad[sel][-1].mul_(lr_sigma)
+                data.grad[sel][:-1].mul_(lr_sh)  
         else:
             raise NotImplementedError(f'Unsupported optimizer {optim}')
         
@@ -358,7 +365,75 @@ class DOT_N3Tree(N3Tree):
                 'data_format' in z.files else None
         tree.extra_data = torch.from_numpy(z['extra_data']).to(device) if \
                           'extra_data' in z.files else None
-        return tree        
+        return tree      
+    
+def get_expon_lr_func(
+    lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000, periodic=True, per_drop=0.3
+):
+    """
+    Continuous learning rate decay function. Adapted from JaxNeRF
+
+    The returned rate is lr_init when step=0 and lr_final when step=max_steps, and
+    is log-linearly interpolated elsewhere (equivalent to exponential decay).
+    If lr_delay_steps>0 then the learning rate will be scaled by some smooth
+    function of lr_delay_mult, such that the initial learning rate is
+    lr_init*lr_delay_mult at the beginning of optimization but will be eased back
+    to the normal learning rate when steps>lr_delay_steps.
+
+    :param conf: config subtree 'lr' or similar
+    :param max_steps: int, the number of steps during optimization.
+    :return HoF which takes step as input
+    """
+    def helper(step):
+        if periodic:
+            step = step%max_steps
+        if step < 0 or (lr_init == 0.0 and lr_final == 0.0):
+            # Disable this parameter
+            return 0.0
+        if lr_delay_steps > 0:
+            # A kind of reverse cosine decay.
+            delay_rate = lr_delay_mult + (1 - lr_delay_mult) * np.sin(
+                0.5 * np.pi * np.clip(step / lr_delay_steps, 0, 1)
+            )
+        else:
+            delay_rate = 1.0
+        t = np.clip(step / max_steps, 0, 1)
+        log_lerp = np.exp(np.log(lr_init) * (1 - t) + np.log(lr_final) * t)
+        return delay_rate * log_lerp
+
+    return helper
+
+class expon_lr():
+    def __init__(self, lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000, periodic=True, per_drop=0.2) -> None:
+        self.lr_init = lr_init
+        self.lr_final = lr_final
+        self.lr_delay_steps = lr_delay_steps
+        self.lr_delay_mult = lr_delay_mult
+        self.max_steps = max_steps
+        self.periodic = periodic
+        self.per_drop = per_drop
+        
+    def step(self, step):
+        if self.periodic:
+            step = step%self.max_steps
+            if step == 0:
+                self.lr_init *= 1-self.per_drop
+                self.lr_final *= 1-self.per_drop
+        if step < 0 or (self.lr_init == 0.0 and self.lr_final == 0.0):
+            # Disable this parameter
+            return 0.0
+        if self.lr_delay_steps > 0:
+            # A kind of reverse cosine decay.
+            delay_rate = self.lr_delay_mult + (1 - self.lr_delay_mult) * np.sin(
+                0.5 * np.pi * np.clip(step / self.lr_delay_steps, 0, 1)
+            )
+        else:
+            delay_rate = 1.0
+        t = np.clip(step / self.max_steps, 0, 1)
+        log_lerp = np.exp(np.log(self.lr_init) * (1 - t) + np.log(self.lr_final) * t)
+        return delay_rate * log_lerp        
+    
+  
 def vis_dif(path_1, path_2, out_path):
     m1 = DOT_N3Tree.load(path_1, map_location="cuda")
     m2 = DOT_N3Tree.load(path_2, map_location="cuda")

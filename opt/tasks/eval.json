@@ -1,7 +1,7 @@
 {
     "eval": true,
-    "data_root": "/hy-tmp/nerf_synthetic",
-    "train_root": "/hy-tmp/syn/test_new_weight",
+    "data_root": "../data/nerf_synthetic",
+    "train_root": "../checkpoints/syn/constant_prune_0.01_init_6_low_prune_tol",
     "variables": {
         "scene": ["lego", "mic", "ship", "chair", "ficus", "materials", "drums", "hotdog"]
     },

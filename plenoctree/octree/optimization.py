@@ -46,6 +46,7 @@ from tqdm import tqdm
 from torch.optim import SGD, AdamW
 from warnings import warn
 
+from pathlib import Path
 from absl import app
 from absl import flags
 
@@ -79,17 +80,17 @@ flags.DEFINE_integer(
     'validation interval')
 flags.DEFINE_integer(
     'num_epochs',
-    20,
+    2,
     'epochs to train for')
 flags.DEFINE_integer(
     'drop_dot',
     50,
     'epoch to drop DOT')
-flags.DEFINE_integer(
-    'thred_count',
-    3,
-    'number for tolerance check'
-)
+# flags.DEFINE_integer(
+#     'thred_count',
+#     3,
+#     'number for tolerance check'
+# )
 flags.DEFINE_integer(
     'depth_limit',
     15,
@@ -101,27 +102,44 @@ flags.DEFINE_integer(
 #     'use SGD optimizer instead of Adam')
 flags.DEFINE_float(
     'lr_sigma',
-    1e0,
-    'optimizer step size')
-flags.DEFINE_float(
-    'lr_sh',
     1e-1,
     'optimizer step size')
+flags.DEFINE_float('lr_sigma_final', 
+                   1e-3,
+                   "xxx"
+                   )
+flags.DEFINE_float('lr_sigma_delay_steps', 0,
+                   help="Reverse cosine steps (0 means disable)")
+flags.DEFINE_float('lr_sigma_delay_mult', 1e-2, "xxx")
+
+
+flags.DEFINE_float(
+    'lr_sh',
+    1e-2,
+    'optimizer step size')
+flags.DEFINE_float('lr_sh_final', 
+                   5e-1,
+                   "xxx"
+                   )
+flags.DEFINE_float('lr_sh_delay_steps', 5,
+                   help="Reverse cosine steps (0 means disable)")
+flags.DEFINE_float('lr_sh_delay_mult', 1e-2, "xxx")
 flags.DEFINE_float(
     'sgd_momentum',
     0.0,
     'sgd momentum')
+
 flags.DEFINE_float(
     "sample_rate",
     0.01,
     'sampling rate in each epoch'
 )
 
-flags.DEFINE_float(
-    "stable_thred",
-    5e-5,
-    'check if the structure is stable'
-)
+# flags.DEFINE_float(
+#     "stable_thred",
+#     5e-5,
+#     'check if the structure is stable'
+# )
 
 
 flags.DEFINE_bool(
@@ -158,14 +176,38 @@ flags.DEFINE_bool(
     True,
     "If set, continues training even if validation PSNR decreases",
 )
-
+flags.DEFINE_bool(
+    "prune_only",
+    True,
+    "zz"
+)
 flags.DEFINE_bool(
     "use_postierior",
-    True,
+    False,
     "If set, the reward will be revised with postierior information"
 )
 
+flags.DEFINE_float(
+    "thresh_val",
+    1e-3,
+    "If set, the reward will be revised with postierior information"
+)
+flags.DEFINE_integer(
+    "sample_every",
+    20,
+    "Sample every.. "
+)
 
+flags.DEFINE_integer(
+    "prune_every",
+    1,
+    "Sample every.. "
+)
+flags.DEFINE_string(
+    "thresh_type",
+    "weight",
+    "Input thresh type",
+)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 # device = "cuda" 
@@ -175,7 +217,9 @@ torch.autograd.set_detect_anomaly(True)
 def main(unused_argv):
     utils.set_random_seed(20200823)
     utils.update_flags(FLAGS)
-    summary_writer = SummaryWriter(osp.dirname(FLAGS.output))
+    log_path = osp.join(osp.dirname(FLAGS.output), osp.basename(FLAGS.output)[:-4]+'_log')
+    Path(osp.dirname(log_path)).mkdir(parents=True, exist_ok=True)
+    summary_writer = SummaryWriter(log_path)
 
     def get_data(stage):
         assert stage in ["train", "val", "test"]
@@ -256,26 +300,40 @@ def main(unused_argv):
     best_validation_psnr = run_test_step(0)
     print('** initial val psnr ', best_validation_psnr)
     best_t = None
-    # pre_mse = 0
+    pre_mse = 0
+    sel = None
     # delta_mse_count = 0
     # prune =False
     # pre_delta_mse = 0
     count = 0
     
+    # lr_sigma_func=expon_lr(FLAGS.lr_sigma, FLAGS.lr_sigma_final, FLAGS.lr_sigma_delay_steps*n_train_imgs,
+    #                                 FLAGS.lr_sigma_delay_mult, FLAGS.sample_every*n_train_imgs, periodic=True)   
+    # lr_sh_func=expon_lr(FLAGS.lr_sh, FLAGS.lr_sh_final, FLAGS.lr_sh_delay_steps*n_train_imgs,
+    #                                 FLAGS.lr_sh_delay_mult, FLAGS.sample_every*n_train_imgs, periodic=True)  
+         
     for i in range(FLAGS.num_epochs):
         print('epoch', i)
         tpsnr = 0.0
         s1 = torch.zeros_like(t.child, dtype=t.data.dtype)  # E(x)
         all_mse = np.zeros(1)
         for j, (c2w, im_gt) in tqdm(enumerate(zip(train_c2w, train_gt)), total=n_train_imgs):
-            # with t.accumulate_weights(op="sum") as accum:
-            im = r.render_persp(c2w, height=H, width=W, fx=focal, cuda=True)
-            dif = im-im_gt.to(device)
-            error = (dif*dif).sum(-1)
-            weight = reweight_image(t, error, c2w, r._get_options(), width=W, height=H, fx=focal)
+            # step=i*n_train_imgs+j
+            if FLAGS.use_postierior:
+                im = r.render_persp(c2w, height=H, width=W, fx=focal, cuda=True)
+                dif = im-im_gt.to(device)
+                error = (dif*dif).sum(-1)
+                weight = reweight_image(t, error, c2w, r._get_options(), width=W, height=H, fx=focal)   
+            else:   
+                with t.accumulate_weights(op="sum") as accum:
+                    im = r.render_persp(c2w, height=H, width=W, fx=focal, cuda=True)
+                weight = accum.value
+
             with torch.no_grad():
-                # s1 += accum.value
+                # weight -= weight.min()
+                # weight /= weight.max()                
                 s1 += weight
+                
             im_gt_ten = im_gt.to(device=device)
             im = torch.clamp(im, 0.0, 1.0)
             mse = ((im - im_gt_ten) ** 2).mean()
@@ -284,7 +342,18 @@ def main(unused_argv):
             # optimizer.zero_grad()
             # t.data.grad = None  # This helps save memory weirdly enough
             mse.backward()
-            t.optim_basis_all_step(FLAGS.lr_sigma, FLAGS.lr_sh)
+            
+            # lr_sigma = lr_sigma_func.step(step)
+            # lr_sh = lr_sh_func.step(step)
+            
+            # summary_writer.add_scalar(
+            #     f'train/lr_sigma', lr_sigma, step
+            # )
+            # summary_writer.add_scalar(
+            #     f'train/lr_sh', lr_sh, step
+            # )
+            t.optim_basis_all_step(FLAGS.lr_sigma, FLAGS.lr_sh, rate_sel=1, sel=sel)
+            # t.optim_basis_all_step(lr_sigma, lr_sh, rate_sel=2, sel=sel)
             # optimizer.step()
             mse_val = mse.detach().cpu()
             if mse_val < 0:
@@ -298,17 +367,17 @@ def main(unused_argv):
         summary_writer.add_scalar(
             f'train/train_psnr', tpsnr, i) 
 
-        # delta_mse = all_mse-pre_mse
-        # abs_dmse = np.abs(delta_mse)
+        delta_mse = all_mse-pre_mse
+        abs_dmse = np.abs(delta_mse)
         # _hessian_mse = np.abs(abs_dmse-pre_delta_mse)
         # pre_delta_mse = abs_dmse
-        # summary_writer.add_scalar(
-        #     f'train/delta_mse', abs_dmse, i
-        # )
+        summary_writer.add_scalar(
+            f'train/delta_mse', abs_dmse, i
+        )
         # summary_writer.add_scalar(
         #     f'train/hessian_mse', _hessian_mse, i
         # )        
-        # pre_mse = all_mse
+        pre_mse = all_mse
        
         if i % FLAGS.val_interval == FLAGS.val_interval - 1 or i == FLAGS.num_epochs - 1:
             validation_psnr = run_test_step(i + 1)
@@ -326,23 +395,36 @@ def main(unused_argv):
                 print('Save last')
                 # name = FLAGS.output
                 t.save(FLAGS.output, compress=False)     
+                return 
         
-        # s1 = prune_func(t, s1, summary_writer=summary_writer, gstep_id=i, thresh_val=1e-2)
-        # if _hessian_mse <= FLAGS.stable_thred:
+        # if i == 0:
+        #     s1 = prune_func(t, s1, summary_writer=summary_writer, gstep_id=i, thresh_val=FLAGS.thresh_val)
+        # if delta_mse <= FLAGS.stable_thred:
         #     delta_mse_count += 1
         # else:
-        #     delta_mse_count = 0   
-        prune_func(t, s1, summary_writer=summary_writer, gstep_id=i, thresh_val=1e-3)
-        sample_func(t, FLAGS.sample_rate, s1)
+        #     delta_mse_count = 0  
+        if FLAGS.prune_only:
+            prune_func(t, s1, summary_writer=summary_writer, gstep_id=i, thresh_val=FLAGS.thresh_val)
+        
+        else:
+            if i%FLAGS.prune_every == 0:
+                s1 = prune_func(t, s1, summary_writer=summary_writer, gstep_id=i, thresh_val=FLAGS.thresh_val, thresh_type=FLAGS.thresh_type)
+                sel = None
+            if i%FLAGS.sample_every == 0:
+            # prune_func(t, s1, summary_writer=summary_writer, gstep_id=i, thresh_val=FLAGS.thresh_val)
+                sel = sample_func(t, FLAGS.sample_rate, s1) 
+            
+        t.shrink_to_fit()
+
+        # sample_func(t, FLAGS.sample_rate, s1, repeats=1)
         # if count == 0:
         #      prune_func(t, s1, summary_writer=summary_writer, gstep_id=i, thresh_val=1e-3)
         # count += 1
-        # # if delta_mse_count >= FLAGS.thred_count:
-        # if count > 11:
+        # if delta_mse_count >= FLAGS.thred_count:
+        # if i % 10:
         #     s1 = prune_func(t, s1, summary_writer=summary_writer, gstep_id=i, thresh_val=1e-3)
         #     sample_func(t, FLAGS.sample_rate, s1)  
-        #     count = 1
-        #     # delta_mse_count = 0
+            # delta_mse_count = 0
         
         summary_writer.add_scalar(
             f'train/num_nodes', t.n_leaves, i)     
