@@ -496,7 +496,8 @@ class NSVF(Dataset):
         if args.render_path:
             raise ValueError("render_path cannot be used for the NSVF dataset.")
         args.data_dir = path.expanduser(args.data_dir)
-        K : np.ndarray = np.loadtxt(path.join(args.data_dir, "intrinsics.txt"))
+        # K : np.ndarray = np.loadtxt(path.join(args.data_dir, "intrinsics.txt"))
+        K: np.ndarray = load_intrinsics(path.join(args.data_dir, "intrinsics.txt"))
         pose_files = sorted(os.listdir(path.join(args.data_dir, 'pose')))
         img_files = sorted(os.listdir(path.join(args.data_dir, 'rgb')))
 
@@ -557,3 +558,43 @@ dataset_dict = {
     "llff": LLFF,
     "nsvf": NSVF,
 }
+
+# https://github.com/facebookresearch/NSVF/blob/12e63e71243a3fd0f90a953626b0c98c95687aa0/fairnr/data/data_utils.py#L146
+def load_matrix(path):
+    lines = [[float(w) for w in line.strip().split()] for line in open(path)]
+    if len(lines[0]) == 2:
+        lines = lines[1:]
+    if len(lines[-1]) == 2:
+        lines = lines[:-1]
+    return np.array(lines).astype(np.float32)
+
+def load_intrinsics(filepath, resized_width=None, invert_y=False):
+    try:
+        intrinsics = load_matrix(filepath)
+        if intrinsics.shape[0] == 3 and intrinsics.shape[1] == 3:
+            _intrinsics = np.zeros((4, 4), np.float32)
+            _intrinsics[:3, :3] = intrinsics
+            _intrinsics[3, 3] = 1
+            intrinsics = _intrinsics
+        if intrinsics.shape[0] == 1 and intrinsics.shape[1] == 16:
+            intrinsics = intrinsics.reshape(4, 4)
+        return intrinsics
+    except ValueError:
+        pass
+
+    # Get camera intrinsics
+    with open(filepath, 'r') as file:
+        
+        f, cx, cy, _ = map(float, file.readline().split())
+    fx = f
+    if invert_y:
+        fy = -f
+    else:
+        fy = f
+
+    # Build the intrinsic matrices
+    full_intrinsic = np.array([[fx, 0., cx, 0.],
+                               [0., fy, cy, 0],
+                               [0., 0, 1, 0],
+                               [0, 0, 0, 1]])
+    return full_intrinsic

@@ -172,21 +172,26 @@ flags.DEFINE_bool(
 )
 
 flags.DEFINE_bool(
+    "recursive_prune",
+    False,
+    'xxx'
+)
+
+flags.DEFINE_bool(
     "continue_on_decrease",
     True,
     "If set, continues training even if validation PSNR decreases",
 )
 flags.DEFINE_bool(
     "prune_only",
-    True,
+    False,
     "zz"
 )
 flags.DEFINE_bool(
-    "use_postierior",
+    "sample_only",
     False,
-    "If set, the reward will be revised with postierior information"
+    "xx"
 )
-
 flags.DEFINE_float(
     "thresh_val",
     1e-3,
@@ -194,7 +199,7 @@ flags.DEFINE_float(
 )
 flags.DEFINE_integer(
     "sample_every",
-    20,
+    2,
     "Sample every.. "
 )
 
@@ -217,6 +222,10 @@ torch.autograd.set_detect_anomaly(True)
 def main(unused_argv):
     utils.set_random_seed(20200823)
     utils.update_flags(FLAGS)
+    print(FLAGS.prune_only)
+    print(FLAGS.recursive_prune)
+    print(FLAGS.prune_every)
+    print(FLAGS.thresh_type)
     log_path = osp.join(osp.dirname(FLAGS.output), osp.basename(FLAGS.output)[:-4]+'_log')
     Path(osp.dirname(log_path)).mkdir(parents=True, exist_ok=True)
     summary_writer = SummaryWriter(log_path)
@@ -319,21 +328,21 @@ def main(unused_argv):
         all_mse = np.zeros(1)
         for j, (c2w, im_gt) in tqdm(enumerate(zip(train_c2w, train_gt)), total=n_train_imgs):
             # step=i*n_train_imgs+j
-            if FLAGS.use_postierior:
+            # if FLAGS.use_postierior:
+                # im = r.render_persp(c2w, height=H, width=W, fx=focal, cuda=True)
+                # dif = im-im_gt.to(device)
+                # error = (dif*dif).sum(-1)
+                # weight = reweight_image(t, error, c2w, r._get_options(), width=W, height=H, fx=focal)   
+            # else:   
+            with t.accumulate_weights(op="sum") as accum:
                 im = r.render_persp(c2w, height=H, width=W, fx=focal, cuda=True)
-                dif = im-im_gt.to(device)
-                error = (dif*dif).sum(-1)
-                weight = reweight_image(t, error, c2w, r._get_options(), width=W, height=H, fx=focal)   
-            else:   
-                with t.accumulate_weights(op="sum") as accum:
-                    im = r.render_persp(c2w, height=H, width=W, fx=focal, cuda=True)
-                weight = accum.value
+            weight = accum.value
 
             with torch.no_grad():
                 # weight -= weight.min()
                 # weight /= weight.max()                
                 s1 += weight
-                
+            weight = None    
             im_gt_ten = im_gt.to(device=device)
             im = torch.clamp(im, 0.0, 1.0)
             mse = ((im - im_gt_ten) ** 2).mean()
@@ -404,17 +413,20 @@ def main(unused_argv):
         # else:
         #     delta_mse_count = 0  
         if FLAGS.prune_only:
-            prune_func(t, s1, summary_writer=summary_writer, gstep_id=i, thresh_val=FLAGS.thresh_val)
-        
+            if i%FLAGS.prune_every == 0:
+                prune_func(t, s1, summary_writer=summary_writer, gstep_id=i, thresh_val=FLAGS.thresh_val, recursive=FLAGS.recursive_prune, thresh_type=FLAGS.thresh_type)
+        elif FLAGS.sample_only:
+            if i%FLAGS.sample_every == 0:
+                sel = sample_func(t, FLAGS.sample_rate, s1) 
         else:
             if i%FLAGS.prune_every == 0:
-                s1 = prune_func(t, s1, summary_writer=summary_writer, gstep_id=i, thresh_val=FLAGS.thresh_val, thresh_type=FLAGS.thresh_type)
+                s1 = prune_func(t, s1, summary_writer=summary_writer, gstep_id=i, thresh_val=FLAGS.thresh_val, thresh_type=FLAGS.thresh_type, recursive=FLAGS.recursive_prune)
                 sel = None
             if i%FLAGS.sample_every == 0:
             # prune_func(t, s1, summary_writer=summary_writer, gstep_id=i, thresh_val=FLAGS.thresh_val)
                 sel = sample_func(t, FLAGS.sample_rate, s1) 
             
-        t.shrink_to_fit()
+        # t.shrink_to_fit()
 
         # sample_func(t, FLAGS.sample_rate, s1, repeats=1)
         # if count == 0:

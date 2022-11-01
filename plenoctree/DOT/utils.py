@@ -49,6 +49,9 @@ def prune_func(DOT, instant_weights,
             val = DOT.data[sel][..., -1]
         elif thresh_type == 'weight':
             val = instant_weights[sel]
+        # elif thresh_type == 'rweight':
+        #     val = DOT.
+        
 
         val = torch.nan_to_num(val, nan=0)
         
@@ -77,6 +80,8 @@ def prune_func(DOT, instant_weights,
             reduced = instant_weights[sel_nids].view(-1, DOT.N ** 3).sum(-1)
             instant_weights[parent_sel] = reduced
 
+            if not recursive:
+                break
             val, leaves = update_val_leaves(DOT, instant_weights)
 
         print(f'Purne {toltal} nodes in toltal.')
@@ -450,4 +455,3 @@ def vis_dif(path_1, path_2, out_path):
     m = m.to("cuda")
     m.data.data = dif
     m.save(out_path)
-

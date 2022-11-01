@@ -34,21 +34,23 @@ export THS_VAL=1e-3
 
 export DATA_ROOT=../data/nerf_synthetic
 export CKPT_ROOT=../checkpoints/DOT
-export pre_dir=../checkpoints/plenoctree/syn_sh16/drums/drums/octrees
+export pre_dir=../checkpoints/DOT/drums
 export SCENE=drums
 export CONFIG_FILE=nerf_sh/config/blender
-export OUT_NAME=tree_shrink_post_val_1e-3_weight_10e.npz
-export epochs=10
+export OUT_NAME=tree_post_val_1e-3_weight_80e.npz
+export epochs=100
+export sample_every=20
 # export postier=false
 
 python -m octree.optimization \
-    --input $pre_dir/tree.npz \
+    --input $pre_dir/tree_post_val_1e-3_weight_10e.npz \
     --config $CONFIG_FILE \
     --data_dir $DATA_ROOT/$SCENE/ \
-    --output $CKPT_ROOT/$SCENE/$OUT_NAME \
+    --output $CKPT_ROOT/$SCENE/sample/$OUT_NAME \
     --thresh_type $THS_TYPE \
     --thresh_val $THS_VAL \
     --num_epochs $epochs \ 
-    --use_postierior 
+    --sample_only \ 
+    --sample_every $sample_every \
 
 # 11074519
