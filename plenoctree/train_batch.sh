@@ -3,7 +3,7 @@
 #BSUB -n 4     
 #BSUB -q gpu         
 #BSUB -gpgpu 1
-#BSUB -o prune_not_recur_10_val_1e0_weight_10e_3.txt      
+#BSUB -o no_selfCP_sample_20_prune_recur_20_val_1e0_weight_100e.txt      
 #BSUB -e err.%J       
 #BSUB -W 48:00
 
@@ -29,8 +29,8 @@ conda activate Adnerf
 # # python -m unittest test.test_mcots.TestMCOTS.test_run_a_round
 # python opt/opt.py -t $CKPT_DIR ${data_dir} -c ${config} -p ${pre_dir} > $NOHUP_FILE 2>&1  
 # echo DETACH
-#  bash train_batch.sh | tee log_sample_20_prune_20_val_1e-2_weight_100e_1.txt;
-export THS_TYPE=sigma
+#  bash train_batch.sh | tee log_sample_20_prune_recur_20_val_1e-1_weight_100e.txt;
+export THS_TYPE=weight
 export THS_VAL=1e0
 
 export DATA_ROOT=../data/nerf_synthetic
@@ -40,13 +40,11 @@ export pre_dir=../checkpoints/plenoctree/syn_sh16/drums/drums/octrees
 export SCENE=drums
 export CONFIG_FILE=nerf_sh/config/blender
 # export OUT_NAME=sample_20_prune_20_val_1e0_weight_100e.npz
-export OUT_NAME=prune_not_recur_10_val_1e0_sigma_10e.npz
+export OUT_NAME=prune_recur_1_val_1e0_weight_100e.npz
 
-export epochs=10
+export epochs=100
 export sample_every=20
 export prune_every=1
-# export postier=false
-
 # python -m octree.optimization \
 #     --input $pre_dir/tree.npz \
 #     --config $CONFIG_FILE \
@@ -57,8 +55,8 @@ export prune_every=1
 #     --num_epochs $epochs \ 
 #     --prune_every $prune_every \
 #     --sample_every $sample_every  \
-#     --prune_only 
-#     # --recursive_prune
+#     --recursive_prune
+#     # --prune_only \
 
 # export pre_dir=../checkpoints/plenoctree/syn_sh16/chair/chair/octrees
 # export SCENE=chair
@@ -73,24 +71,25 @@ export prune_every=1
 #     --num_epochs $epochs \ 
 #     --prune_every $prune_every \
 #     --sample_every $sample_every  \
-#     # --recursive_prune
-#     # --prune_only \ 
+#     --recursive_prune
+#     # --prune_only \
 
-# export pre_dir=../checkpoints/plenoctree/syn_sh16/ficus/ficus/octrees
-# export SCENE=ficus
+export pre_dir=../checkpoints/plenoctree/syn_sh16/ficus/ficus/octrees
+export SCENE=ficus
 
-# python -m octree.optimization \
-#     --input $pre_dir/tree.npz \
-#     --config $CONFIG_FILE \
-#     --data_dir $DATA_ROOT/$SCENE/ \
-#     --output $CKPT_ROOT/$SCENE/$OUT_NAME \
-#     --thresh_type $THS_TYPE \
-#     --thresh_val $THS_VAL \
-#     --num_epochs $epochs \ 
-#     --prune_every $prune_every \
-#     --sample_every $sample_every  \
-#     --prune_only 
-#     # --recursive_prune
+python -m octree.optimization \
+    --input $pre_dir/tree.npz \
+    --config $CONFIG_FILE \
+    --data_dir $DATA_ROOT/$SCENE/ \
+    --output $CKPT_ROOT/$SCENE/$OUT_NAME \
+    --thresh_type $THS_TYPE \
+    --thresh_val $THS_VAL \
+    --num_epochs $epochs \ 
+    --prune_every $prune_every \
+    --sample_every $sample_every  \
+    --prune_only \
+    --recursive_prune
+
 
 # export pre_dir=../checkpoints/plenoctree/syn_sh16/lego/lego/octrees
 # export SCENE=lego
@@ -105,42 +104,43 @@ export prune_every=1
 #     --num_epochs $epochs \ 
 #     --prune_every $prune_every \
 #     --sample_every $sample_every  \
-#     --prune_only 
-#     # --recursive_prune
-
-export pre_dir=../checkpoints/plenoctree/syn_sh16/mic/mic/octrees
-export SCENE=mic
+#     --recursive_prune
+#     # --prune_only \
 
 
-python -m octree.optimization \
-    --input $pre_dir/tree.npz \
-    --config $CONFIG_FILE \
-    --data_dir $DATA_ROOT/$SCENE/ \
-    --output $CKPT_ROOT/$SCENE/$OUT_NAME \
-    --thresh_type $THS_TYPE \
-    --thresh_val $THS_VAL \
-    --num_epochs $epochs \ 
-    --prune_every $prune_every \
-    --sample_every $sample_every  \
-    --prune_only 
-    # --recursive_prune
-
-export pre_dir=../checkpoints/plenoctree/syn_sh16/ship/ship/octrees
-export SCENE=ship
+# export pre_dir=../checkpoints/plenoctree/syn_sh16/mic/mic/octrees
+# export SCENE=mic
 
 
-python -m octree.optimization \
-    --input $pre_dir/tree.npz \
-    --config $CONFIG_FILE \
-    --data_dir $DATA_ROOT/$SCENE/ \
-    --output $CKPT_ROOT/$SCENE/$OUT_NAME \
-    --thresh_type $THS_TYPE \
-    --thresh_val $THS_VAL \
-    --num_epochs $epochs \ 
-    --prune_every $prune_every \
-    --sample_every $sample_every  \
-    --prune_only 
-    # --recursive_prune
+# python -m octree.optimization \
+#     --input $pre_dir/tree.npz \
+#     --config $CONFIG_FILE \
+#     --data_dir $DATA_ROOT/$SCENE/ \
+#     --output $CKPT_ROOT/$SCENE/$OUT_NAME \
+#     --thresh_type $THS_TYPE \
+#     --thresh_val $THS_VAL \
+#     --num_epochs $epochs \ 
+#     --prune_every $prune_every \
+#     --sample_every $sample_every  \
+#     --recursive_prune
+#     # --prune_only \
+
+# export pre_dir=../checkpoints/plenoctree/syn_sh16/ship/ship/octrees
+# export SCENE=ship
+
+
+# python -m octree.optimization \
+#     --input $pre_dir/tree.npz \
+#     --config $CONFIG_FILE \
+#     --data_dir $DATA_ROOT/$SCENE/ \
+#     --output $CKPT_ROOT/$SCENE/$OUT_NAME \
+#     --thresh_type $THS_TYPE \
+#     --thresh_val $THS_VAL \
+#     --num_epochs $epochs \ 
+#     --prune_every $prune_every \
+#     --sample_every $sample_every  \
+#     --recursive_prune
+#     # --prune_only \
 
 
 

@@ -1,0 +1,187 @@
+True
+False
+1
+sigma
+ Load Blender ../data/nerf_synthetic/mic/ split train
+Using given val set
+ Load Blender ../data/nerf_synthetic/mic/ split val
+N3Tree load
+Evaluating
+** initial val psnr  33.95027574539185
+epoch 0
+** train_psnr 36.85102714538574
+Evaluating
+** val psnr  33.95755516052246 best 33.95027574539185
+
+Prune 389522/3948309
+Purne 389522 nodes in toltal.
+epoch 1
+** train_psnr 36.86630939483643
+Evaluating
+** val psnr  33.968623580932615 best 33.95755516052246
+
+Prune 112350/3631517
+Purne 112350 nodes in toltal.
+epoch 2
+** train_psnr 36.8878516960144
+Evaluating
+** val psnr  33.97657402038574 best 33.968623580932615
+
+Prune 66962/3577421
+Purne 66962 nodes in toltal.
+epoch 3
+** train_psnr 36.90351392745972
+Evaluating
+** val psnr  33.981267528533934 best 33.97657402038574
+
+Prune 56406/3563372
+Purne 56406 nodes in toltal.
+epoch 4
+** train_psnr 36.91606672286987
+Evaluating
+** val psnr  33.98511947631836 best 33.981267528533934
+
+Prune 52913/3557569
+Purne 52913 nodes in toltal.
+epoch 5
+** train_psnr 36.9270852470398
+Evaluating
+** val psnr  33.988337669372555 best 33.98511947631836
+
+Prune 51779/3554783
+Purne 51779 nodes in toltal.
+epoch 6
+** train_psnr 36.936913890838625
+Evaluating
+** val psnr  33.99113973617554 best 33.988337669372555
+
+Prune 51632/3553061
+Purne 51632 nodes in toltal.
+epoch 7
+** train_psnr 36.946200656890866
+Evaluating
+** val psnr  33.993661079406735 best 33.99113973617554
+
+Prune 51716/3551570
+Purne 51716 nodes in toltal.
+epoch 8
+** train_psnr 36.95487882614136
+Evaluating
+** val psnr  33.99588228225708 best 33.993661079406735
+
+Prune 51506/3550009
+Purne 51506 nodes in toltal.
+epoch 9
+** train_psnr 36.963141975402834
+Evaluating
+** val psnr  33.99795734405517 best 33.99588228225708
+
+Save last
+True
+False
+1
+sigma
+ Load Blender ../data/nerf_synthetic/ship/ split train
+Using given val set
+ Load Blender ../data/nerf_synthetic/ship/ split val
+N3Tree load
+Evaluating
+** initial val psnr  29.32934705734253
+epoch 0
+** train_psnr 31.979651222229005
+Evaluating
+** val psnr  29.336398181915282 best 29.32934705734253
+
+Prune 2884763/24008601
+Purne 2884763 nodes in toltal.
+epoch 1
+** train_psnr 31.97855854034424
+Evaluating
+** val psnr  29.34187873840332 best 29.336398181915282
+
+Prune 669816/21454749
+Purne 669816 nodes in toltal.
+epoch 2
+** train_psnr 32.002581157684325
+Evaluating
+** val psnr  29.350073165893555 best 29.34187873840332
+
+Prune 292544/21013630
+Purne 292544 nodes in toltal.
+epoch 3
+** train_psnr 32.019294567108155
+Evaluating
+** val psnr  29.354524822235106 best 29.350073165893555
+
+Prune 221312/20925556
+Purne 221312 nodes in toltal.
+epoch 4
+** train_psnr 32.0319500541687
+Evaluating
+** val psnr  29.35919303894043 best 29.354524822235106
+
+Prune 207242/20904339
+Purne 207242 nodes in toltal.
+epoch 5
+** train_psnr 32.043082275390624
+Evaluating
+** val psnr  29.363446044921876 best 29.35919303894043
+
+Prune 204407/20895792
+Purne 204407 nodes in toltal.
+epoch 6
+** train_psnr 32.05292587280273
+Evaluating
+** val psnr  29.36708583831787 best 29.363446044921876
+
+Prune 203014/20889457
+Purne 203014 nodes in toltal.
+epoch 7
+** train_psnr 32.06231508255005
+Evaluating
+** val psnr  29.370553016662598 best 29.36708583831787
+
+Prune 201775/20883948
+Purne 201775 nodes in toltal.
+epoch 8
+** train_psnr 32.07109838485718
+Evaluating
+** val psnr  29.373708305358885 best 29.370553016662598
+
+Prune 201124/20879146
+Purne 201124 nodes in toltal.
+epoch 9
+** train_psnr 32.07939626693726
+Evaluating
+** val psnr  29.3765807723999 best 29.373708305358885
+
+Save last
+
+Sender: Unischeduler System <CONNECT.haotianbai@mgt02>
+Subject: Job 22072: </hpc/users/CONNECT/haotianbai/.jhjobs/1667288287.22072.1.shell> Exited
+
+Job </hpc/users/CONNECT/haotianbai/.jhjobs/1667288287.22072.1.shell> was submitted from host <mgt02> by user <CONNECT.haotianbai>.
+Job was executed on host(s) <4*g-node03>, in queue <gpu>, as user <CONNECT.haotianbai>.
+</hpc/users/CONNECT/haotianbai> was used as the home directory.
+</hpc/users/CONNECT/haotianbai/work_dir/AdaptiveNerf/plenoctree> was used as the working directory.
+Started at 2022-11-01 15:33:30
+Results reported at 2022-11-01 15:59:16
+
+Your job looked like:
+
+------------------------------------------------------------
+# User input
+/hpc/users/CONNECT/haotianbai/.jhjobs/1667288287.22072.1.shell
+------------------------------------------------------------
+
+Exited with exit code 1.
+
+Resource usage summary:
+
+    CPU time   :         1428.98 sec.
+    Max Memory :             13150 MB
+    Max Processes  :               3
+
+
+The output (if any) follows:
+

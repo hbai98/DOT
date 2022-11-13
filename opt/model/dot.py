@@ -183,7 +183,7 @@ class N3Tree_(N3Tree):
         return tree_spec    
     
     
-    def refine(self, repeats=1, sel=None):
+    def refine(self, repeats=1, sel=None, self_cp=True):
         """
         Refine each selected leaf node, respecting depth_limit.
 
@@ -234,8 +234,9 @@ class N3Tree_(N3Tree):
 
                 self.child[filled:new_filled] = 0
                 self.child[sel] = new_idxs - leaf_node[:, 0].to(torch.int32)
-                self.data.data[filled:new_filled] = self.data.data[
-                        sel][:, None, None, None]
+                if self_cp:
+                    self.data.data[filled:new_filled] = self.data.data[
+                            sel][:, None, None, None]
                 self.parent_depth[filled:new_filled, 0] = self._pack_index(leaf_node)  # parent
                 self.parent_depth[filled:new_filled, 1] = self.parent_depth[
                         leaf_node[:, 0], 1] + 1  # depth
@@ -298,7 +299,7 @@ class DOT(nn.Module):
         self.data_format = data_format
         
         if pre_train_pth is not None:
-            self.tree = N3Tree.load(pre_train_pth, device=device)
+            self.tree = N3Tree_.load(pre_train_pth, device=device)
             pre_depth_lim = self.tree.depth_limit
             pre_invradius = self.tree.invradius
             pre_offset = self.tree.offset
@@ -338,7 +339,7 @@ class DOT(nn.Module):
             if flag:
                 self.tree.expand(data_format, data_dim=data_dim)
         else:
-            self.tree = N3Tree(radius=radius,
+            self.tree = N3Tree_(radius=radius,
                             center=center,
                             data_format=data_format,
                             init_refine=init_refine,

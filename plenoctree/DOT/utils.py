@@ -98,7 +98,7 @@ def update_val_leaves(DOT, instant_weights, thresh_type='weight'):
     val = torch.nan_to_num(val, nan=0)
     return val, leaves
 
-def sample_func(tree, sampling_rate, VAL, repeats=1):
+def sample_func(tree, sampling_rate, VAL, repeats=1, self_cp=True):
     with torch.no_grad():
         val, leaves = update_val_leaves(tree, VAL)
         sample_k = int(max(1, tree.n_leaves*sampling_rate))
@@ -111,13 +111,13 @@ def sample_func(tree, sampling_rate, VAL, repeats=1):
             start = (i-1)*interval
             end = i*interval
             sel = idxs[start:end]
-            expand(tree, sel, i)
+            expand(tree, sel, i, self_cp=self_cp)
         return idxs
 
-def expand(tree, idxs, repeats):
+def expand(tree, idxs, repeats, self_cp=True):
     # group expansion
     sel = (*idxs.long().T,)
-    tree.refine(sel=sel, repeats=repeats)
+    tree.refine(sel=sel, repeats=repeats, self_cp=self_cp)
         
 def select(max_sel, reward, rw_idxs):
     p_val = reward  # only MSE
@@ -371,7 +371,80 @@ class DOT_N3Tree(N3Tree):
         tree.extra_data = torch.from_numpy(z['extra_data']).to(device) if \
                           'extra_data' in z.files else None
         return tree      
-    
+    # Leaf refinement & memory management methods
+    def refine(self, repeats=1, sel=None, self_cp=True):
+        """
+        Refine each selected leaf node, respecting depth_limit.
+
+        :param repeats: int number of times to repeat refinement
+        :param sel: :code:`(N, 4)` node selector. Default selects all leaves.
+
+        :return: True iff N3Tree.data parameter was resized, requiring
+                 optimizer reinitialization if you're using an optimizer
+
+        .. warning::
+            The parameter :code:`tree.data` can change due to refinement. If any refine() call returns True, please re-make any optimizers
+            using :code:`tree.params()`.
+
+        .. warning::
+            The selector :code:`sel` is assumed to contain unique leaf indices. If there are duplicates
+            memory will be wasted. We do not dedup here for efficiency reasons.
+
+        """
+        if self._lock_tree_structure:
+            raise RuntimeError("Tree locked")
+        with torch.no_grad():
+            resized = False
+            for repeat_id in range(repeats):
+                filled = self.n_internal
+                if sel is None:
+                    # Default all leaves
+                    sel = (*self._all_leaves().T,)
+                depths = self.parent_depth[sel[0], 1]
+                # Filter by depth & leaves
+                good_mask = (depths < self.depth_limit) & (self.child[sel] == 0)
+                sel = [t[good_mask] for t in sel]
+                leaf_node =  torch.stack(sel, dim=-1).to(device=self.data.device)
+                num_nc = len(sel[0])
+                if num_nc == 0:
+                    # Nothing to do
+                    return False
+                new_filled = filled + num_nc
+
+                cap_needed = new_filled - self.capacity
+                if cap_needed > 0:
+                    self._resize_add_cap(cap_needed)
+                    resized = True
+
+                new_idxs = torch.arange(filled, filled + num_nc,
+                        device=leaf_node.device, dtype=self.child.dtype) # NNC
+
+                self.child[filled:new_filled] = 0
+                self.child[sel] = new_idxs - leaf_node[:, 0].to(torch.int32)
+                if self_cp:
+                    self.data.data[filled:new_filled] = self.data.data[
+                            sel][:, None, None, None]
+                self.parent_depth[filled:new_filled, 0] = self._pack_index(leaf_node)  # parent
+                self.parent_depth[filled:new_filled, 1] = self.parent_depth[
+                        leaf_node[:, 0], 1] + 1  # depth
+
+                if repeat_id < repeats - 1:
+                    # Infer new selector
+                    t1 = torch.arange(filled, new_filled,
+                            device=self.data.device).repeat_interleave(self.N ** 3)
+                    rangen = torch.arange(self.N, device=self.data.device)
+                    t2 = rangen.repeat_interleave(self.N ** 2).repeat(
+                            new_filled - filled)
+                    t3 = rangen.repeat_interleave(self.N).repeat(
+                            (new_filled - filled) * self.N)
+                    t4 = rangen.repeat((new_filled - filled) * self.N ** 2)
+                    sel = (t1, t2, t3, t4)
+                self._n_internal += num_nc
+        if repeats > 0:
+            self._invalidate()
+        return resized
+
+        
 def get_expon_lr_func(
     lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000, periodic=True, per_drop=0.3
 ):

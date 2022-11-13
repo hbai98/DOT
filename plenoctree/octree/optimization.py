@@ -226,6 +226,7 @@ def main(unused_argv):
     print(FLAGS.recursive_prune)
     print(FLAGS.prune_every)
     print(FLAGS.thresh_type)
+    print(FLAGS.thresh_val)
     log_path = osp.join(osp.dirname(FLAGS.output), osp.basename(FLAGS.output)[:-4]+'_log')
     Path(osp.dirname(log_path)).mkdir(parents=True, exist_ok=True)
     summary_writer = SummaryWriter(log_path)
@@ -420,7 +421,7 @@ def main(unused_argv):
                 sel = sample_func(t, FLAGS.sample_rate, s1) 
         else:
             if i%FLAGS.prune_every == 0:
-                s1 = prune_func(t, s1, summary_writer=summary_writer, gstep_id=i, thresh_val=FLAGS.thresh_val, thresh_type=FLAGS.thresh_type, recursive=FLAGS.recursive_prune)
+                sel = prune_func(t, s1, summary_writer=summary_writer, gstep_id=i, thresh_val=FLAGS.thresh_val, thresh_type=FLAGS.thresh_type, recursive=FLAGS.recursive_prune)
                 sel = None
             if i%FLAGS.sample_every == 0:
             # prune_func(t, s1, summary_writer=summary_writer, gstep_id=i, thresh_val=FLAGS.thresh_val)

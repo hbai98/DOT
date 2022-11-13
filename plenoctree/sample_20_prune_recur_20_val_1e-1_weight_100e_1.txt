@@ -1,0 +1,606 @@
+
+
+False
+True
+20
+weight
+0.1
+ Load Blender ../data/nerf_synthetic/mic/ split train
+Using given val set
+ Load Blender ../data/nerf_synthetic/mic/ split val
+N3Tree load
+Evaluating
+** initial val psnr  33.95027574539185
+epoch 0
+** train_psnr 36.85102714538574
+Evaluating
+** val psnr  33.95755516052246 best 33.95027574539185
+
+Prune 652694/3948309
+Prune 141001/3368345
+Prune 80255/3299815
+Prune 70490/3288720
+Prune 67781/3285584
+Prune 66927/3284632
+Prune 66689/3284373
+Prune 66619/3284303
+Purne 1212456 nodes in toltal.
+Start sampling 32842 nodes, and increase 262736 nodes.
+epoch 1
+** train_psnr 36.72950874328613
+Evaluating
+** val psnr  33.93860904693604 best 33.95755516052246
+epoch 2
+** train_psnr 36.85804069519043
+Evaluating
+** val psnr  33.96768175125122 best 33.95755516052246
+
+epoch 3
+** train_psnr 36.91806154251098
+Evaluating
+** val psnr  33.985851230621336 best 33.96768175125122
+
+epoch 4
+** train_psnr 36.96069023132324
+Evaluating
+** val psnr  33.99882350921631 best 33.985851230621336
+
+epoch 5
+** train_psnr 36.99483814239502
+Evaluating
+** val psnr  34.00931610107422 best 33.99882350921631
+
+epoch 6
+** train_psnr 37.024720134735105
+Evaluating
+** val psnr  34.01831979751587 best 34.00931610107422
+
+epoch 7
+** train_psnr 37.05212333679199
+Evaluating
+** val psnr  34.026400089263916 best 34.01831979751587
+
+epoch 8
+** train_psnr 37.07792512893677
+Evaluating
+** val psnr  34.03387266159058 best 34.026400089263916
+
+epoch 9
+** train_psnr 37.102542552947995
+Evaluating
+** val psnr  34.04086101531983 best 34.03387266159058
+
+epoch 10
+** train_psnr 37.12616521835327
+Evaluating
+** val psnr  34.04743431091308 best 34.04086101531983
+
+epoch 11
+** train_psnr 37.14891315460205
+Evaluating
+** val psnr  34.053657150268556 best 34.04743431091308
+
+epoch 12
+** train_psnr 37.170926074981686
+Evaluating
+** val psnr  34.0595694732666 best 34.053657150268556
+
+epoch 13
+** train_psnr 37.19226995468139
+Evaluating
+** val psnr  34.06519332885742 best 34.0595694732666
+
+epoch 14
+** train_psnr 37.212999229431155
+Evaluating
+** val psnr  34.070558109283446 best 34.06519332885742
+
+epoch 15
+** train_psnr 37.233156032562256
+Evaluating
+** val psnr  34.07568723678589 best 34.070558109283446
+
+epoch 16
+** train_psnr 37.252785453796385
+Evaluating
+** val psnr  34.08059474945068 best 34.07568723678589
+
+epoch 17
+** train_psnr 37.2719140625
+Evaluating
+** val psnr  34.08529176712036 best 34.08059474945068
+
+epoch 18
+** train_psnr 37.29057371139526
+Evaluating
+** val psnr  34.08980031967163 best 34.08529176712036
+
+epoch 19
+** train_psnr 37.30879179000854
+Evaluating
+** val psnr  34.09412689208985 best 34.08980031967163
+
+epoch 20
+** train_psnr 37.32659381866455
+Evaluating
+** val psnr  34.09828134536743 best 34.09412689208985
+
+Prune 69272/3514190
+Prune 46438/3488409
+Prune 43911/3485574
+Prune 43498/3485126
+Prune 43456/3485084
+Purne 246575 nodes in toltal.
+Start sampling 34850 nodes, and increase 278800 nodes.
+epoch 21
+** train_psnr 37.34548574447632
+Evaluating
+** val psnr  34.10400577545166 best 34.09828134536743
+
+epoch 22
+** train_psnr 37.36819236755371
+Evaluating
+** val psnr  34.1091206741333 best 34.10400577545166
+
+epoch 23
+** train_psnr 37.38982242584228
+Evaluating
+** val psnr  34.11398014068604 best 34.1091206741333
+
+epoch 24
+** train_psnr 37.41084054946899
+Evaluating
+** val psnr  34.11862293243408 best 34.11398014068604
+
+epoch 25
+** train_psnr 37.43134073257446
+Evaluating
+** val psnr  34.12306657791137 best 34.11862293243408
+
+epoch 26
+** train_psnr 37.45137119293213
+Evaluating
+** val psnr  34.127327861785886 best 34.12306657791137
+
+epoch 27
+** train_psnr 37.470965461730955
+Evaluating
+** val psnr  34.13142292022705 best 34.127327861785886
+
+epoch 28
+** train_psnr 37.49016489028931
+Evaluating
+** val psnr  34.13536554336548 best 34.13142292022705
+
+epoch 29
+** train_psnr 37.50899387359619
+Evaluating
+** val psnr  34.13916585922241 best 34.13536554336548
+
+epoch 30
+** train_psnr 37.527468547821044
+Evaluating
+** val psnr  34.14283199310303 best 34.13916585922241
+
+epoch 31
+** train_psnr 37.54560606002808
+Evaluating
+** val psnr  34.14637205123901 best 34.14283199310303
+
+epoch 32
+** train_psnr 37.563422470092775
+Evaluating
+** val psnr  34.14979209899902 best 34.14637205123901
+
+epoch 33
+** train_psnr 37.580934600830076
+Evaluating
+** val psnr  34.15309955596924 best 34.14979209899902
+
+epoch 34
+** train_psnr 37.598157749176025
+Evaluating
+** val psnr  34.15629947662354 best 34.15309955596924
+
+epoch 35
+** train_psnr 37.61510412216187
+Evaluating
+** val psnr  34.159394111633304 best 34.15629947662354
+
+epoch 36
+** train_psnr 37.63178218841553
+Evaluating
+** val psnr  34.16239164352417 best 34.159394111633304
+
+epoch 37
+** train_psnr 37.648202648162844
+Evaluating
+** val psnr  34.1652952003479 best 34.16239164352417
+
+epoch 38
+** train_psnr 37.66437686920166
+Evaluating
+** val psnr  34.16810863494873 best 34.1652952003479
+
+epoch 39
+** train_psnr 37.680313205718996
+Evaluating
+** val psnr  34.170835971832275 best 34.16810863494873
+
+epoch 40
+** train_psnr 37.69601905822754
+Evaluating
+** val psnr  34.17347936630249 best 34.170835971832275
+
+Prune 60340/3729020
+Prune 46116/3713074
+Prune 44674/3711464
+Prune 44415/3711205
+Purne 195545 nodes in toltal.
+Start sampling 37111 nodes, and increase 296888 nodes.
+epoch 41
+** train_psnr 37.710334625244144
+Evaluating
+** val psnr  34.17620288848877 best 34.17347936630249
+
+epoch 42
+** train_psnr 37.72881875991821
+Evaluating
+** val psnr  34.17923616409302 best 34.17620288848877
+
+epoch 43
+** train_psnr 37.74658470153808
+Evaluating
+** val psnr  34.182134342193606 best 34.17923616409302
+
+epoch 44
+** train_psnr 37.76398962020874
+Evaluating
+** val psnr  34.18491836547852 best 34.182134342193606
+
+epoch 45
+** train_psnr 37.78107761383057
+Evaluating
+** val psnr  34.18759962081909 best 34.18491836547852
+
+epoch 46
+** train_psnr 37.79789169311523
+Evaluating
+** val psnr  34.19018926620483 best 34.18759962081909
+
+epoch 47
+** train_psnr 37.81445400238037
+Evaluating
+** val psnr  34.19269353866577 best 34.19018926620483
+
+epoch 48
+** train_psnr 37.83077514648438
+Evaluating
+** val psnr  34.19511631011963 best 34.19269353866577
+
+epoch 49
+** train_psnr 37.846869468688965
+Evaluating
+** val psnr  34.1974654006958 best 34.19511631011963
+
+epoch 50
+** train_psnr 37.86274345397949
+Evaluating
+** val psnr  34.199743576049805 best 34.1974654006958
+
+epoch 51
+** train_psnr 37.878412075042725
+Evaluating
+** val psnr  34.201954727172854 best 34.199743576049805
+
+epoch 52
+** train_psnr 37.893882999420164
+Evaluating
+** val psnr  34.20410129547119 best 34.201954727172854
+
+epoch 53
+** train_psnr 37.909163341522216
+Evaluating
+** val psnr  34.2061863899231 best 34.20410129547119
+
+epoch 54
+** train_psnr 37.924259929656984
+Evaluating
+** val psnr  34.20821208953858 best 34.2061863899231
+
+epoch 55
+** train_psnr 37.93918121337891
+Evaluating
+** val psnr  34.21018091201782 best 34.20821208953858
+
+epoch 56
+** train_psnr 37.953931159973145
+Evaluating
+** val psnr  34.21209714889526 best 34.21018091201782
+
+epoch 57
+** train_psnr 37.96851636886597
+Evaluating
+** val psnr  34.213960285186765 best 34.21209714889526
+
+epoch 58
+** train_psnr 37.98294105529785
+Evaluating
+** val psnr  34.215772762298585 best 34.213960285186765
+
+epoch 59
+** train_psnr 37.997211093902585
+Evaluating
+** val psnr  34.217535438537595 best 34.215772762298585
+
+epoch 60
+** train_psnr 38.011329402923586
+Evaluating
+** val psnr  34.2192520904541 best 34.217535438537595
+
+Prune 57022/3970940
+Prune 45927/3958704
+Prune 44835/3957437
+Prune 44681/3957269
+Prune 44667/3957248
+Purne 237132 nodes in toltal.
+Start sampling 39572 nodes, and increase 316576 nodes.
+epoch 61
+** train_psnr 38.02323524475098
+Evaluating
+** val psnr  34.2206099319458 best 34.2192520904541
+
+epoch 62
+** train_psnr 38.039207706451414
+Evaluating
+** val psnr  34.222552700042726 best 34.2206099319458
+
+epoch 63
+** train_psnr 38.05469175338745
+Evaluating
+** val psnr  34.22440660476685 best 34.222552700042726
+
+epoch 64
+** train_psnr 38.06990310668945
+Evaluating
+** val psnr  34.226191158294675 best 34.22440660476685
+
+epoch 65
+** train_psnr 38.08490037918091
+Evaluating
+** val psnr  34.22791439056397 best 34.226191158294675
+
+epoch 66
+** train_psnr 38.09970596313477
+Evaluating
+** val psnr  34.22958154678345 best 34.22791439056397
+
+epoch 67
+** train_psnr 38.11433172225952
+Evaluating
+** val psnr  34.23119926452637 best 34.22958154678345
+
+epoch 68
+** train_psnr 38.128795566558836
+Evaluating
+** val psnr  34.232770595550534 best 34.23119926452637
+
+epoch 69
+** train_psnr 38.14310415267944
+Evaluating
+** val psnr  34.234292354583744 best 34.232770595550534
+
+epoch 70
+** train_psnr 38.15726247787475
+Evaluating
+** val psnr  34.23577268600464 best 34.234292354583744
+
+epoch 71
+** train_psnr 38.1712770652771
+Evaluating
+** val psnr  34.23721488952637 best 34.23577268600464
+
+epoch 72
+** train_psnr 38.18515598297119
+Evaluating
+** val psnr  34.23861633300781 best 34.23721488952637
+
+epoch 73
+** train_psnr 38.19890235900879
+Evaluating
+** val psnr  34.23998134613037 best 34.23861633300781
+
+epoch 74
+** train_psnr 38.2125231552124
+Evaluating
+** val psnr  34.2413106918335 best 34.23998134613037
+
+epoch 75
+** train_psnr 38.22601917266846
+Evaluating
+** val psnr  34.242604370117185 best 34.2413106918335
+
+epoch 76
+** train_psnr 38.239394149780274
+Evaluating
+** val psnr  34.24386432647705 best 34.242604370117185
+
+epoch 77
+** train_psnr 38.252651615142824
+Evaluating
+** val psnr  34.245092964172365 best 34.24386432647705
+
+epoch 78
+** train_psnr 38.26579811096192
+Evaluating
+** val psnr  34.24629016876221 best 34.245092964172365
+
+epoch 79
+** train_psnr 38.27883228302002
+Evaluating
+** val psnr  34.247456569671634 best 34.24629016876221
+
+epoch 80
+** train_psnr 38.29175794601441
+Evaluating
+** val psnr  34.248593463897706 best 34.247456569671634
+
+Prune 54810/4234245
+Prune 45752/4224298
+Prune 44968/4223423
+Prune 44863/4223318
+Prune 44835/4223290
+Prune 44828/4223283
+Purne 280056 nodes in toltal.
+Start sampling 42232 nodes, and increase 337856 nodes.
+epoch 81
+** train_psnr 38.30239080429077
+Evaluating
+** val psnr  34.2494407081604 best 34.248593463897706
+
+epoch 82
+** train_psnr 38.31680723190308
+Evaluating
+** val psnr  34.2507265663147 best 34.2494407081604
+
+epoch 83
+** train_psnr 38.330845222473144
+Evaluating
+** val psnr  34.251953048706056 best 34.2507265663147
+
+epoch 84
+** train_psnr 38.34466745376587
+Evaluating
+** val psnr  34.25313510894775 best 34.251953048706056
+
+epoch 85
+** train_psnr 38.35831371307373
+Evaluating
+** val psnr  34.254276809692385 best 34.25313510894775
+
+epoch 86
+** train_psnr 38.371812438964845
+Evaluating
+** val psnr  34.25539016723633 best 34.254276809692385
+
+epoch 87
+** train_psnr 38.38518222808838
+Evaluating
+** val psnr  34.25646507263183 best 34.25539016723633
+
+epoch 88
+** train_psnr 38.39842407226563
+Evaluating
+** val psnr  34.25750755310059 best 34.25646507263183
+
+epoch 89
+** train_psnr 38.411544456481934
+Evaluating
+** val psnr  34.25852298736572 best 34.25750755310059
+
+epoch 90
+** train_psnr 38.424548645019534
+Evaluating
+** val psnr  34.25951313018799 best 34.25852298736572
+
+epoch 91
+** train_psnr 38.437446098327634
+Evaluating
+** val psnr  34.260476703643796 best 34.25951313018799
+
+epoch 92
+** train_psnr 38.45023868560791
+Evaluating
+** val psnr  34.26141496658325 best 34.260476703643796
+
+epoch 93
+** train_psnr 38.4629288482666
+Evaluating
+** val psnr  34.26232593536377 best 34.26141496658325
+
+epoch 94
+** train_psnr 38.47552227020264
+Evaluating
+** val psnr  34.2632141494751 best 34.26232593536377
+
+epoch 95
+** train_psnr 38.48802188873291
+Evaluating
+** val psnr  34.26408016204834 best 34.2632141494751
+
+epoch 96
+** train_psnr 38.50042770385742
+Evaluating
+** val psnr  34.26492446899414 best 34.26408016204834
+
+epoch 97
+** train_psnr 38.512745513916016
+Evaluating
+** val psnr  34.265748023986816 best 34.26492446899414
+
+epoch 98
+** train_psnr 38.52497512817383
+Evaluating
+** val psnr  34.26654968261719 best 34.265748023986816
+
+epoch 99
+** train_psnr 38.53712314605713
+Evaluating
+** val psnr  34.26733263015747 best 34.26654968261719
+
+Save last
+False
+True
+20
+weight
+0.1
+ Load Blender ../data/nerf_synthetic/ship/ split train
+Using given val set
+ Load Blender ../data/nerf_synthetic/ship/ split val
+N3Tree load
+Evaluating
+** initial val psnr  29.32934705734253
+epoch 0
+** train_psnr 31.979651222229005
+Evaluating
+** val psnr  29.336398181915282 best 29.32934705734253
+
+Prune 3875851/24008601
+Prune 783986/20463661
+Prune 324492/19940264
+Prune 255745/19861213
+Prune 244748/19848823
+Prune 242844/19846716
+Prune 242452/19846268
+Purne 5970118 nodes in toltal.
+Start sampling 198461 nodes, and increase 1587688 nodes.
+epoch 1
+
+Sender: Unischeduler System <CONNECT.haotianbai@mgt02>
+Subject: Job 22304: </hpc/users/CONNECT/haotianbai/.jhjobs/1667472396.22304.1.shell> Exited
+
+Job </hpc/users/CONNECT/haotianbai/.jhjobs/1667472396.22304.1.shell> was submitted from host <mgt02> by user <CONNECT.haotianbai>.
+Job was executed on host(s) <4*g-node02>, in queue <gpu>, as user <CONNECT.haotianbai>.
+</hpc/users/CONNECT/haotianbai> was used as the home directory.
+</hpc/users/CONNECT/haotianbai/work_dir/AdaptiveNerf/plenoctree> was used as the working directory.
+Started at 2022-11-03 18:42:02
+Results reported at 2022-11-03 19:19:18
+
+Your job looked like:
+
+------------------------------------------------------------
+# User input
+/hpc/users/CONNECT/haotianbai/.jhjobs/1667472396.22304.1.shell
+------------------------------------------------------------
+
+Exited with exit code 1.
+
+Resource usage summary:
+
+    CPU time   : 2137.7000000000003 sec.
+    Max Memory :             10861 MB
+    Max Processes  :               3
+
+
+The output (if any) follows:
+
