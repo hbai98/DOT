@@ -16,4 +16,4 @@ conda activate Adnerf
 cd svox 
 
 python setup.py install
-
+export CUDA_HOME='/user/local/cuda-11.7'

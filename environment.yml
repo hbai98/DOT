@@ -2,10 +2,11 @@
 name: Adnerf
 channels:
   - pytorch
+  - nvidia
   - defaults
 dependencies:
-  - python=3.8.8
-  - numpy>=1.16.4,<1.19.0
+  - python
+  - numpy
   - pip
   - pip:
       - imageio
@@ -28,8 +29,11 @@ dependencies:
       - tensorboard
       - scikit-image
       - opencv-python
+      - svox
+      - configargparse
   - pytorch
   - torchvision
   - cudatoolkit
+  - pytorch-cuda=11.7
   - tqdm
 
