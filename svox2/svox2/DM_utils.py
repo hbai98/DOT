@@ -55,7 +55,28 @@ class DM_SpaseGrid(SparseGrid):
         self.use_dm = use_dm
         self.dm_recursive = dm_recursive
         self.dm_step_size = dm_step_size
+
+    def dm(self, val, thred):
+        t_l = (1-self.dm_thred_tolerence)*thred
+        t_h = (1+self.dm_thred_tolerence)*thred
+        bound_mask = torch.logical_and(val>=t_l, val<=t_h) # [3]
+        pos_bound = torch.nonzero(bound_mask).to(torch.int)
         
+        step = 0
+        while True:
+            step += 1
+            print(f'step: {step}, total: {step*self.dm_step_size}, select {pos_bound.size(0)}\
+                ({pos_bound.size(0)/torch.nonzero(val >= thred).size(0)}%) points to do dm. ')
+            if pos_bound.size(0) == 0:
+                print(f'Warning: No boundary is found given the thred_tolerence({self.dm_thred_tolerence}) in weights after {step} steps.')
+                break
+            # cal norm for conv/deconv direction
+            pos_bound = finite_difference_march(pos_bound, val, epsilon=self.dm_step_size)
+            val = self.conv_voxel(pos_bound, val, epsilon=self.dm_step_size)
+            
+            if not self.dm_recursive:
+                break   
+        return val     
     def resample(
         self,
         reso: Union[int, List[int]],
@@ -103,6 +124,82 @@ class DM_SpaseGrid(SparseGrid):
             curr_reso = self.links.shape
             dtype = torch.float32
             reso_facts = [0.5 * curr_reso[i] / reso[i] for i in range(3)]
+
+            use_weight_thresh = cameras is not None
+
+            batch_size = 720720
+            self.density_data.grad = None
+            self.sh_data.grad = None
+            self.sparse_grad_indexer = None
+            self.sparse_sh_grad_indexer = None
+            self.density_rms = None
+            self.sh_rms = None            
+            # dm collects all information for previous resolution 
+            if self.use_dm:
+                val = None
+                all_sample_vals_density = []
+                # resample previous
+                X = torch.linspace(
+                    0,
+                    curr_reso[0] - 1,
+                    curr_reso[0],
+                    dtype=dtype,
+                )
+                Y = torch.linspace(
+                    0,
+                    curr_reso[1] - 1,
+                    curr_reso[1],
+                    dtype=dtype,
+                )
+                Z = torch.linspace(
+                    0,
+                    curr_reso[2] - 1,
+                    curr_reso[2],
+                    dtype=dtype,
+                )
+                X, Y, Z = torch.meshgrid(X, Y, Z)
+                points = torch.stack((X, Y, Z), dim=-1).view(-1, 3)
+
+                if use_z_order:
+                    morton = utils.gen_morton(reso[0], dtype=torch.long).view(-1)
+                    points[morton] = points.clone()
+                points = points.to(device=device)
+                                    
+                all_sample_vals_density = []
+                for i in tqdm(range(0, len(points), batch_size)):
+                    sample_vals_density, _ = self.sample(
+                        points[i : i + batch_size],
+                        grid_coords=True,
+                        want_colors=False
+                    )
+                    sample_vals_density = sample_vals_density
+                    all_sample_vals_density.append(sample_vals_density)
+                    
+                sample_vals_density = torch.cat(
+                        all_sample_vals_density, dim=0).view(curr_reso)                
+                del all_sample_vals_density                    
+                if use_weight_thresh:
+                    gsz = torch.tensor(curr_reso)
+                    offset = (self._offset * gsz - 0.5).to(device=device)
+                    scaling = (self._scaling * gsz).to(device=device)
+                    max_wt_grid = torch.zeros(curr_reso, dtype=torch.float32, device=device)
+                    print(" DM: Pre grid weight render", sample_vals_density.shape)
+                    for i, cam in enumerate(cameras):
+                        _C.grid_weight_render(
+                            sample_vals_density, cam._to_cpp(),
+                            0.5,
+                            weight_render_stop_thresh,
+                            #  self.opt.last_sample_opaque,
+                            False,
+                            offset, scaling, max_wt_grid
+                        )
+                    val = max_wt_grid
+                    thred = weight_thresh
+                else:
+                    val = sample_vals_density
+                    thred = sigma_thresh
+                self.dm(val, thred)
+                
             X = torch.linspace(
                 reso_facts[0] - 0.5,
                 curr_reso[0] - reso_facts[0] - 0.5,
@@ -128,27 +225,18 @@ class DM_SpaseGrid(SparseGrid):
                 morton = utils.gen_morton(reso[0], dtype=torch.long).view(-1)
                 points[morton] = points.clone()
             points = points.to(device=device)
-
-            use_weight_thresh = cameras is not None
-
-            batch_size = 720720
+                                
             all_sample_vals_density = []
-            all_sample_vals_sh = []
             print('Pass 1/2 (density)')
             for i in tqdm(range(0, len(points), batch_size)):
-                sample_vals_density, sample_vals_density = self.sample(
+                sample_vals_density, _ = self.sample(
                     points[i : i + batch_size],
                     grid_coords=True,
-                    want_colors=self.use_dm
+                    want_colors=False
                 )
                 sample_vals_density = sample_vals_density
                 all_sample_vals_density.append(sample_vals_density)
-            self.density_data.grad = None
-            self.sh_data.grad = None
-            self.sparse_grad_indexer = None
-            self.sparse_sh_grad_indexer = None
-            self.density_rms = None
-            self.sh_rms = None
+
 
             sample_vals_density = torch.cat(
                     all_sample_vals_density, dim=0).view(reso)
@@ -183,27 +271,7 @@ class DM_SpaseGrid(SparseGrid):
                     #  np.save(f"wmax_vol/wmax_view{i:05d}.npy", tmp_wt_grid.detach().cpu().numpy())
                 #  import sys
                 #  sys.exit(0)
-                if self.use_dm:
-                    t_l = (1-self.dm_thred_tolerence)*weight_thresh
-                    t_h = (1+self.dm_thred_tolerence)*weight_thresh
-                    bound_mask = torch.logical_and(max_wt_grid>=t_l, max_wt_grid<=t_h) # [3]
-                    pos_bound = torch.nonzero(bound_mask).to(torch.int)
-                    
-                    step = 0
-                    while True:
-                        step += 1
-                        print(f'step: {step}, total: {step*self.dm_step_size}, select {pos_bound.size(0)}\
-                            ({pos_bound.size(0)/torch.nonzero(max_wt_grid >= weight_thresh).size(0)}%) points to do dm. ')
-                        if pos_bound.size(0) == 0:
-                            print(f'Warning: No boundary is found given the thred_tolerence({self.dm_thred_tolerence}) in weights after {step} steps.')
-                            break
-                        # cal norm for conv/deconv direction
-                        pos_bound = finite_difference_march(pos_bound, max_wt_grid, epsilon=self.dm_step_size)
-                        sample_vals_density, sample_vals_sh, max_wt_grid = self.conv_voxel(pos_bound, max_wt_grid, sample_vals_density, color, epsilon=self.dm_step_size)
-                        
-                        if not self.dm_recursive:
-                            break
-                        # print(norm)
+
                         # next location for conv/deconv operations 
                         # print(torch.ceil(pos_bound + self.dm_step_size*norm) - pos_bound)
                         # print(pos_bound)
@@ -221,36 +289,16 @@ class DM_SpaseGrid(SparseGrid):
                     
                 del max_wt_grid
             else:
-                
-                if self.use_dm:
-                    t_l = (1-self.dm_thred_tolerence)*sigma_thresh
-                    t_h = (1+self.dm_thred_tolerence)*sigma_thresh
-                    bound_mask = torch.logical_and(sample_vals_density>=t_l, sample_vals_density<=t_h) # [3]
-                    pos_bound = torch.nonzero(bound_mask).to(torch.int)
+                sample_vals_mask = sample_vals_density >= sigma_thresh
+                if max_elements > 0 and max_elements < sample_vals_density.numel() \
+                                    and max_elements < torch.count_nonzero(sample_vals_mask):
+                    # To bound the memory usage
+                    sigma_thresh_bounded = torch.topk(sample_vals_density.view(-1),
+                                    k=max_elements, sorted=False).values.min().item()
+                    sigma_thresh = max(sigma_thresh, sigma_thresh_bounded)
+                    print(' Readjusted sigma thresh to fit to memory:', sigma_thresh)
                     
-                    step = 0
-                    while True:
-                        step += 1
-                        if pos_bound.size(0) == 0:
-                            print(f'Warning: No boundary is found given the thred_tolerence({self.dm_thred_tolerence}) in weights after {step} steps.')
-                            break
-                        # cal norm for conv/deconv direction
-                        pos_bound = finite_difference_march(pos_bound, sample_vals_density, epsilon=self.dm_step_size)
-                        sample_vals_density, sample_vals_sh, _ = self.conv_voxel(pos_bound, sample_vals_density, epsilon=self.dm_step_size)
-                        
-                        if not self.dm_recursive:
-                            break
-                else:                        
                     sample_vals_mask = sample_vals_density >= sigma_thresh
-                    if max_elements > 0 and max_elements < sample_vals_density.numel() \
-                                        and max_elements < torch.count_nonzero(sample_vals_mask):
-                        # To bound the memory usage
-                        sigma_thresh_bounded = torch.topk(sample_vals_density.view(-1),
-                                        k=max_elements, sorted=False).values.min().item()
-                        sigma_thresh = max(sigma_thresh, sigma_thresh_bounded)
-                        print(' Readjusted sigma thresh to fit to memory:', sigma_thresh)
-                        
-                        sample_vals_mask = sample_vals_density >= sigma_thresh
                 if self.opt.last_sample_opaque:
                     # Don't delete the last z layer
                     sample_vals_mask[:, :, -1] = 1
@@ -308,7 +356,7 @@ class DM_SpaseGrid(SparseGrid):
             if accelerate and self.links.is_cuda:
                 self.accelerate()
     # simple identity kernel 
-    def conv_voxel(self, pos, signal, density, color, epsilon=1, deconv=False):
+    def conv_voxel(self, pos, signal, epsilon=1, deconv=False):
         
         x, y, z = pos[:, 0], pos[:, 1], pos[:, 2]
         xl = torch.cat([torch.clamp(x-i, min=0) for i in range(1, epsilon)]) 
@@ -347,16 +395,16 @@ class DM_SpaseGrid(SparseGrid):
             B = links_near.size(0)
             weight = 1/B
             # TODO:split 
-            density[links_near] += sigma*weight
-            color[links_near] += rgb*weight
+            self.density_data[links_near] += sigma*weight
+            self.sh_data[links_near] += rgb*weight
             signal[signal_near_idx] += signal[signal_center_idx]
         else:
             sigma, rgb = self._fetch_links(links_near)
-            density[links_center] += sigma.mean(dim=0)
-            color[links_center] += rgb.mean(dim=0)
+            self.density_data[links_center] += sigma.mean(dim=0)
+            self.sh_data[links_center] += rgb.mean(dim=0)
             signal[signal_center_idx] += signal[signal_near_idx].mean()
         
-        return density, color, signal
+        return signal
 # ref: https://github.com/zhaofuq/Instant-NSR/blob/main/nerf/network_sdf.py#L192
 def finite_difference_march(pos, grid, epsilon=1, tolerance=1e-4):
     # x: [N, 3]
