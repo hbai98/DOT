@@ -57,7 +57,6 @@ from DOT.utils import *
 from torch.utils.tensorboard import SummaryWriter
 
 FLAGS = flags.FLAGS
-
 utils.define_flags()
 
 flags.DEFINE_string(
@@ -80,12 +79,8 @@ flags.DEFINE_integer(
     'validation interval')
 flags.DEFINE_integer(
     'num_epochs',
-    2,
+    100,
     'epochs to train for')
-flags.DEFINE_integer(
-    'drop_dot',
-    50,
-    'epoch to drop DOT')
 # flags.DEFINE_integer(
 #     'thred_count',
 #     3,
@@ -184,13 +179,19 @@ flags.DEFINE_bool(
 )
 flags.DEFINE_bool(
     "prune_only",
-    False,
+    True,
     "zz"
 )
+
 flags.DEFINE_bool(
     "sample_only",
     False,
     "xx"
+)
+flags.DEFINE_bool(
+    "use_grid",
+    True,
+    "Whether to use the grid instead of tree",
 )
 flags.DEFINE_float(
     "thresh_val",
@@ -199,10 +200,9 @@ flags.DEFINE_float(
 )
 flags.DEFINE_integer(
     "sample_every",
-    2,
+    20,
     "Sample every.. "
 )
-
 flags.DEFINE_integer(
     "prune_every",
     1,
@@ -214,6 +214,7 @@ flags.DEFINE_string(
     "Input thresh type",
 )
 
+
 device = "cuda" if torch.cuda.is_available() else "cpu"
 # device = "cuda" 
 
@@ -222,11 +223,7 @@ torch.autograd.set_detect_anomaly(True)
 def main(unused_argv):
     utils.set_random_seed(20200823)
     utils.update_flags(FLAGS)
-    print(FLAGS.prune_only)
-    print(FLAGS.recursive_prune)
-    print(FLAGS.prune_every)
-    print(FLAGS.thresh_type)
-    print(FLAGS.thresh_val)
+    
     log_path = osp.join(osp.dirname(FLAGS.output), osp.basename(FLAGS.output)[:-4]+'_log')
     Path(osp.dirname(log_path)).mkdir(parents=True, exist_ok=True)
     summary_writer = SummaryWriter(log_path)
@@ -258,11 +255,12 @@ def main(unused_argv):
 
     vis_dir = osp.splitext(FLAGS.input)[0] + '_render'
     os.makedirs(vis_dir, exist_ok=True)
-
+    
     print('N3Tree load')
     t = DOT_N3Tree.load(FLAGS.input, map_location=device)
+    
     t.set_depth_limit(FLAGS.depth_limit)
-
+    
     if 'llff' in FLAGS.config:
         ndc_config = svox.NDCConfig(width=W, height=H, focal=focal)
     else:
@@ -421,8 +419,7 @@ def main(unused_argv):
                 sel = sample_func(t, FLAGS.sample_rate, s1) 
         else:
             if i%FLAGS.prune_every == 0:
-                sel = prune_func(t, s1, summary_writer=summary_writer, gstep_id=i, thresh_val=FLAGS.thresh_val, thresh_type=FLAGS.thresh_type, recursive=FLAGS.recursive_prune)
-                sel = None
+                prune_func(t, s1, summary_writer=summary_writer, gstep_id=i, thresh_val=FLAGS.thresh_val, thresh_type=FLAGS.thresh_type, recursive=FLAGS.recursive_prune)
             if i%FLAGS.sample_every == 0:
             # prune_func(t, s1, summary_writer=summary_writer, gstep_id=i, thresh_val=FLAGS.thresh_val)
                 sel = sample_func(t, FLAGS.sample_rate, s1) 
