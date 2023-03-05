@@ -15,7 +15,7 @@ source activate
 conda activate plenoxel
 
 export scene=chair
-export exp=${scene}_no_rec_stepsize_3_tol_1e-1
+export exp=${scene}_rec_stepsize_3_tol_1e-1
 export GPU=0
 
 echo Launching experiment $exp

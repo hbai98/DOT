@@ -44,9 +44,10 @@ class DM_SpaseGrid(SparseGrid):
         background_nlayers : int = 0,  # BG MSI layers
         background_reso : int = 256,  # BG MSI cubemap face size
         use_dm: bool = True,
-        dm_recursive: bool = False, 
-        dm_thred_tolerence: float = 5e-2, # the boundary of threshold  (%)
+        dm_recursive: bool = True, 
+        dm_thred_tolerence: float = 1e-1, # the boundary of threshold  (%)
         dm_step_size: int = 3, 
+        dm_step_max: int = 500,
         device: Union[torch.device, str] = "cpu",
     ):
         super().__init__(reso, radius, center, basis_type, basis_dim, basis_reso, use_z_order, use_sphere_bound, mlp_posenc_size, mlp_width, background_nlayers, background_reso, device)
@@ -55,27 +56,36 @@ class DM_SpaseGrid(SparseGrid):
         self.use_dm = use_dm
         self.dm_recursive = dm_recursive
         self.dm_step_size = dm_step_size
+        self.dm_step_max = dm_step_max
 
     def dm(self, val, thred):
-        t_l = (1-self.dm_thred_tolerence)*thred
+        # t_l = (1-self.dm_thred_tolerence)*thred
         t_h = (1+self.dm_thred_tolerence)*thred
-        bound_mask = torch.logical_and(val>=t_l, val<=t_h) # [3]
+        bound_mask = val<=t_h # [3]
         pos_bound = torch.nonzero(bound_mask).to(torch.int)
         
         step = 0
         while True:
             step += 1
-            print(f'step: {step}, total: {step*self.dm_step_size}, select {pos_bound.size(0)}\
-                ({pos_bound.size(0)/torch.nonzero(val >= thred).size(0)}%) points to do dm. ')
+            print(f'step: {step}, total: {step*self.dm_step_size}, select {pos_bound.size(0)}({pos_bound.size(0)/torch.nonzero(val >= thred).size(0)}%) points to do dm. ')
             if pos_bound.size(0) == 0:
                 print(f'Warning: No boundary is found given the thred_tolerence({self.dm_thred_tolerence}) in weights after {step} steps.')
                 break
+            if step > self.dm_step_max:
+                print(f'Max step: {self.dm_step_max}')
+                break
             # cal norm for conv/deconv direction
             pos_bound = finite_difference_march(pos_bound, val, epsilon=self.dm_step_size)
+            # print(val.shape)
             val = self.conv_voxel(pos_bound, val, epsilon=self.dm_step_size)
+            # filter pos_bound basd on val
+            # tmp_val = val[(*pos_bound.long().T, )]
+            # bound_mask = tmp_val<=t_h
+            # pos_bound = pos_bound[bound_mask]
             
             if not self.dm_recursive:
                 break   
+            
         return val     
     def resample(
         self,
@@ -403,7 +413,7 @@ class DM_SpaseGrid(SparseGrid):
             self.density_data[links_center] += sigma.mean(dim=0)
             self.sh_data[links_center] += rgb.mean(dim=0)
             signal[signal_center_idx] += signal[signal_near_idx].mean()
-        
+
         return signal
 # ref: https://github.com/zhaofuq/Instant-NSR/blob/main/nerf/network_sdf.py#L192
 def finite_difference_march(pos, grid, epsilon=1, tolerance=1e-4):
@@ -413,6 +423,19 @@ def finite_difference_march(pos, grid, epsilon=1, tolerance=1e-4):
     # keep the grid no nan
     grid = torch.nan_to_num(grid, 0)
     x, y, z = pos[:, 0], pos[:, 1], pos[:, 2]
+    
+    sel_x = torch.logical_and(x>=0, x<grid.size(0))
+    sel_y = torch.logical_and(y>=0, y<grid.size(1))
+    sel_z = torch.logical_and(z>=0, z<grid.size(2))
+    
+    sel = torch.logical_and(sel_x, sel_y)
+    sel = torch.logical_and(sel, sel_z)
+    
+    x = x[sel]
+    y = y[sel]
+    z = z[sel]
+    pos = pos[sel]
+        
     xl, xr = torch.clamp(x - epsilon, min=0), torch.clamp(x + epsilon, max=grid.size(0) - 1)
     yl, yr = torch.clamp(y - epsilon, min=0), torch.clamp(y + epsilon, max=grid.size(1) - 1)
     zl, zr = torch.clamp(z - epsilon, min=0), torch.clamp(z + epsilon, max=grid.size(2) - 1)  
@@ -426,11 +449,11 @@ def finite_difference_march(pos, grid, epsilon=1, tolerance=1e-4):
         delta_y / epsilon,
         delta_z / epsilon
     ], dim=-1)
-    # Clamp to avoid values that are too low
-    # Disable autograd while clamping because
-    # we only do this for numerical stability
-    with torch.no_grad():
-        norm.clamp(min = -tolerance, max= tolerance)
+    
+    # norm filter 
+    mask = torch.all(torch.abs(norm)>=tolerance, dim=-1)
+    norm = norm[mask]
+    pos = pos[mask]
     norm = rearrange(norm, 'B D -> D B') / torch.norm(norm, dim=-1)
     norm = rearrange(norm, 'D B -> B D')
     
