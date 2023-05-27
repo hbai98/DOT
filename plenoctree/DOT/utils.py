@@ -51,8 +51,6 @@ def prune_func(DOT, instant_weights,
             val = instant_weights[sel]
         # elif thresh_type == 'rweight':
         #     val = DOT.
-        
-
         val = torch.nan_to_num(val, nan=0)
         
         thred = thresh_val
@@ -157,7 +155,7 @@ class DOT_N3Tree(N3Tree):
                  map_location=None,
                  ):
         """
-        Construct N^3 Tree: spatial mento carlo tree
+        Construct N^3 Tree: spatial tree
         :param pre_data: torch.Tensor, the previous record of data. if None, the data is registered 
         as the buffer for recording purpose. 
 
@@ -440,10 +438,25 @@ class DOT_N3Tree(N3Tree):
                     t4 = rangen.repeat((new_filled - filled) * self.N ** 2)
                     sel = (t1, t2, t3, t4)
                 self._n_internal += num_nc
+                
         if repeats > 0:
             self._invalidate()
         return resized
-
+    
+    # def to_grid(self):
+    #     # Get the full tree by expanding the leaves to reach the max depth 
+    #     # and then lock it. 
+    #     leaves = self._all_leaves()
+    #     sel_nids = leaves[:, 0] # leaves' parents node ids (exists duplicate copies)
+    #     nids = torch.unique(sel_nids) # clean duplicate common parents ids
+    #     sel = self.parent_depth[nids] # access parent_depth given the parent's idx
+        
+    #     # get max dim and calculate how many steps to expand 
+    #     max_depth = torch.max(sel[:, 1])
+    #     delta_depth = max_depth - sel[:, 1]
+        
+    #     print(delta_depth)
+        
         
 def get_expon_lr_func(
     lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000, periodic=True, per_drop=0.3

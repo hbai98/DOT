@@ -53,12 +53,11 @@ from octree.nerf import datasets
 from octree.nerf import sh_proj
 
 from svox import N3Tree
-from svox import NDCConfig, VolumeRenderer
+from svox import NDCConfig
 from svox.helpers import _get_c_extension
 from tqdm import tqdm
 
 _C = _get_c_extension()
-
 FLAGS = flags.FLAGS
 
 utils.define_flags()

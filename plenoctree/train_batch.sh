@@ -34,15 +34,15 @@ export THS_TYPE=weight
 export THS_VAL=1e0
 
 export DATA_ROOT=../data/nerf_synthetic
-export CKPT_ROOT=../checkpoints/DOT/syn
+export CKPT_ROOT=../checkpoints/DOG
 export pre_dir=../checkpoints/plenoctree/syn_sh16/drums/drums/octrees
 # export pre_dir=../checkpoints/DOT
 export SCENE=drums
 export CONFIG_FILE=nerf_sh/config/blender
 # export OUT_NAME=sample_20_prune_20_val_1e0_weight_100e.npz
-export OUT_NAME=prune_recur_1_val_1e0_weight_100e.npz
+export OUT_NAME=grid.npz
 
-export epochs=100
+export epochs=150
 export sample_every=20
 export prune_every=1
 # python -m octree.optimization \
@@ -88,7 +88,8 @@ python -m octree.optimization \
     --prune_every $prune_every \
     --sample_every $sample_every  \
     --prune_only \
-    --recursive_prune
+    --use_grid 
+    # --recursive_prune
 
 
 # export pre_dir=../checkpoints/plenoctree/syn_sh16/lego/lego/octrees
