@@ -33,9 +33,9 @@ import jax
 from jax import random
 import numpy as np
 
-from nerf_sh.nerf import datasets
-from nerf_sh.nerf import models
-from nerf_sh.nerf import utils
+from DOT.nerf_sh.nerf import datasets
+from DOT.nerf_sh.nerf import models
+from DOT.nerf_sh.nerf import utils
 
 FLAGS = flags.FLAGS
 

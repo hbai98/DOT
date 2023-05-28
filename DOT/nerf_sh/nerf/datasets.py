@@ -29,7 +29,7 @@ if not INTERNAL:
 import jax
 import numpy as np
 from PIL import Image
-from nerf_sh.nerf import utils
+from DOT.nerf_sh.nerf import utils
 from tqdm import tqdm
 
 

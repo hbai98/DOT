@@ -38,9 +38,9 @@ from flax.training import checkpoints
 
 import functools
 
-from nerf_sh.nerf import models
-from nerf_sh.nerf import utils
-from nerf_sh.nerf.utils import host0_print as h0print
+from DOT.nerf_sh.nerf import models
+from DOT.nerf_sh.nerf import utils
+from DOT.nerf_sh.nerf.utils import host0_print as h0print
 
 FLAGS = flags.FLAGS
 

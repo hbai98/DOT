@@ -30,7 +30,7 @@ import numpy as np
 from PIL import Image
 import yaml
 from tqdm import tqdm
-from nerf_sh.nerf import datasets
+from DOT.nerf_sh.nerf import datasets
 
 INTERNAL = False
 

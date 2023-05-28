@@ -45,14 +45,6 @@ def _rays_spec_from_rays(rays):
     spec.vdirs = rays.viewdirs
     return spec
 
-def _rays_spec_from_rays_weights(rays, weights):
-    spec = _C.RaysSpec()
-    spec.origins = rays.origins
-    spec.dirs = rays.dirs
-    spec.vdirs = rays.viewdirs
-    spec.weights = weights
-    return spec
-
 def _make_camera_spec(c2w, width, height, fx, fy):
     spec = _C.CameraSpec()
     spec.c2w = c2w

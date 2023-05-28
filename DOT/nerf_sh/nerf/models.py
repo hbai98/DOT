@@ -21,11 +21,12 @@ import flax
 from flax import linen as nn
 from jax import random
 import jax.numpy as jnp
+import torch
 
-from nerf_sh.nerf import model_utils
-from nerf_sh.nerf import utils
-from nerf_sh.nerf import sh
-from nerf_sh.nerf import sg
+from DOT.nerf_sh.nerf import model_utils
+from DOT.nerf_sh.nerf import utils
+from DOT.nerf_sh.nerf import sh
+from DOT.nerf_sh.nerf import sg
 
 
 def get_model(key, args):
@@ -421,6 +422,8 @@ def construct_nerf(key, args):
         legacy_posenc_order=args.legacy_posenc_order,
     )
     key1, key = random.split(key)
+    # key = torch.tensor(key)
+    # key1, key = torch.split(key)
     init_variables = model.init(
         key1,
         method=model._quick_init,
