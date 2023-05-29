@@ -10,15 +10,16 @@ python -m pip install --upgrade pip
 
 dot:
 pip3 install --upgrade torch torchvision torchaudio
+pip install -r requirements.txt
 cd dependencies/svox 
 pip install .
 
+
 nerfsh:
 pip install --upgrade "jax[cuda11_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
-
-
-both:
 pip install -r requirements.txt
+
+
 ```
 conda install pytorch torchvision cudatoolkit=11.0 -c pytorch
 conda install pytorch==1.13.1 torchvision==0.14.1 torchaudio==0.13.1 -c pytorch

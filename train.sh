@@ -15,17 +15,17 @@ export THS_VAL=1e0
 export DATA_ROOT=../../dataset/BlendedMVS
 export CKPT_ROOT=checkpoints/BlendedMVS
 export SCENE=Character
-export CONFIG_FILE=DOT/nerf_sh/config/tt
-export OUT_NAME=DOT.npz
+export CONFIG_FILE=DOT/nerf_sh/config/blendmsv
 export epochs=100
 export sample_every=20
 export prune_every=1
-export GPUs=2
+export GPUs=7
 # export postier=false
 
+conda activate dot_nerfsh
 CUDA_VISIBLE_DEVICES=$GPUs,
 python -m DOT.nerf_sh.train \
-    --train_dir $CKPT_ROOT/$SCENE/ \
+    --train_dir $CKPT_ROOT/$SCENE"_new"/ \
     --config $CONFIG_FILE \
     --data_dir $DATA_ROOT/$SCENE/ \ 
 
@@ -68,10 +68,10 @@ python -m DOT.octree.optimization \
     # --prune_only \ 
 
 python -m DOT.octree.evaluation \
-    --input $CKPT_ROOT/$SCENE/octrees/dot.npz \
+    --input $CKPT_ROOT/$SCENE/octrees/pot.npz \
     --config $CONFIG_FILE \
     --data_dir $DATA_ROOT/$SCENE/ \
-    --write_images $CKPT_ROOT/$SCENE/octrees/dot_rend
+    --write_images $CKPT_ROOT/$SCENE/octrees/pot_rend
 
 python -m DOT.octree.compression \
     $CKPT_ROOT/$SCENE/octrees/dot.npz \

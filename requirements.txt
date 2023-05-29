@@ -3,7 +3,6 @@ dotmap
 imageio
 imageio-ffmpeg
 ipdb
-pretrainedmodels
 lpips
 flax==0.5.1
 opencv-python>=4.4.0
@@ -15,3 +14,4 @@ pymcubes
 scipy>=1.6.0
 tqdm
 scikit-image
+pretrainedmodels
