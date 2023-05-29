@@ -48,8 +48,8 @@ from pathlib import Path
 from absl import app
 from absl import flags
 
-from octree.nerf import datasets
-from octree.nerf import utils
+from DOT.octree.nerf import datasets
+from DOT.octree.nerf import utils
 from DOT.utils import *
 
 from torch.utils.tensorboard import SummaryWriter
@@ -398,9 +398,9 @@ def main(unused_argv):
                 break
             
             if i == FLAGS.num_epochs - 1:
-                print('Save last')
+                print('Save the best')
                 # name = FLAGS.output
-                t.save(FLAGS.output, compress=False)     
+                best_t.save(FLAGS.output, compress=False)     
                 return 
         
         # if i == 0:

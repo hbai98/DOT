@@ -16,9 +16,10 @@ export DATA_ROOT=../../dataset/BlendedMVS
 export CKPT_ROOT=checkpoints/BlendedMVS
 export SCENE=Character
 export CONFIG_FILE=DOT/nerf_sh/config/tt
-export OUT_NAME=test.npz
+export OUT_NAME=DOT.npz
 export epochs=100
 export sample_every=20
+export prune_every=1
 export GPUs=2
 # export postier=false
 
@@ -35,25 +36,47 @@ python -m DOT.nerf_sh.eval \
     --config $CONFIG_FILE \
     --data_dir $DATA_ROOT/$SCENE/ \ 
 
-# --is_jaxnerf_ckpt 
+# 
+CUDA_VISIBLE_DEVICES=$GPUs,
 python -m DOT.octree.extraction \
-    --train_dir $CKPT_ROOT/$SCENE/ \
+    --train_dir $CKPT_ROOT/$SCENE/ --is_jaxnerf_ckpt \
     --config $CONFIG_FILE \
     --data_dir $DATA_ROOT/$SCENE/ \
     --output $CKPT_ROOT/$SCENE/octrees/tree.npz
 
+# POT
 CUDA_VISIBLE_DEVICES=$GPUs,
-python -m DOT.octree.optimization \
-    --input $pre_dir/tree.npz \
+python -m DOT.octree.POT_opt \
+    --input $CKPT_ROOT/$SCENE/octrees/tree.npz \
     --config $CONFIG_FILE \
     --data_dir $DATA_ROOT/$SCENE/ \
-    --output $CKPT_ROOT/$SCENE/$OUT_NAME \
+    --output $CKPT_ROOT/$SCENE/octrees/pot.npz \
+    --continue_on_decrease
+
+# DOT
+CUDA_VISIBLE_DEVICES=$GPUs,
+python -m DOT.octree.optimization \
+    --input $CKPT_ROOT/$SCENE/octrees/tree.npz \
+    --config $CONFIG_FILE \
+    --data_dir $DATA_ROOT/$SCENE/ \
+    --output $CKPT_ROOT/$SCENE/octrees/dot.npz \
     --thresh_type $THS_TYPE \
     --thresh_val $THS_VAL \
-    --num_epochs $epochs \ 
-    --prune_only \ 
+    --num_epochs $epochs \
     --prune_every $prune_every \
-    # --sample_every $sample_every 
+    --sample_every $sample_every 
+    # --prune_only \ 
+
+python -m DOT.octree.evaluation \
+    --input $CKPT_ROOT/$SCENE/octrees/dot.npz \
+    --config $CONFIG_FILE \
+    --data_dir $DATA_ROOT/$SCENE/ \
+    --write_images $CKPT_ROOT/$SCENE/octrees/dot_rend
+
+python -m DOT.octree.compression \
+    $CKPT_ROOT/$SCENE/octrees/dot.npz \
+    --out_dir $CKPT_ROOT/$SCENE/octrees/compress \
+    --overwrite
 # 11074519
 
 # ns-train vanilla-nerf --data ../../dataset/BlendedMVS

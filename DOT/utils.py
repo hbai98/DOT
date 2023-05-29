@@ -51,7 +51,7 @@ def prune_func(DOT, instant_weights,
             val = instant_weights[sel]
         # elif thresh_type == 'rweight':
         #     val = DOT.
-        val = torch.nan_to_num(val, nan=0)
+        val = torch.nan_to_num(val, nan=0).cpu()
         
         thred = thresh_val
         toltal = 0 

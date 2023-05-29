@@ -21,7 +21,6 @@ import flax
 from flax import linen as nn
 from jax import random
 import jax.numpy as jnp
-import torch
 
 from DOT.nerf_sh.nerf import model_utils
 from DOT.nerf_sh.nerf import utils

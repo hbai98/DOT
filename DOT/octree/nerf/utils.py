@@ -29,7 +29,7 @@ import numpy as np
 from PIL import Image
 import yaml
 from tqdm import tqdm
-from octree.nerf import datasets
+from DOT.octree.nerf import datasets
 
 INTERNAL = False
 

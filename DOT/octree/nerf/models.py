@@ -24,7 +24,7 @@ import math
 import torch
 import torch.nn as nn
 
-from octree.nerf import model_utils
+from DOT.octree.nerf import model_utils
 
 
 def get_model(args):

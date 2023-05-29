@@ -27,7 +27,7 @@ import numpy as np
 from PIL import Image
 from tqdm import tqdm
 
-from octree.nerf import utils
+from DOT.octree.nerf import utils
 
 
 def get_dataset(split, args):

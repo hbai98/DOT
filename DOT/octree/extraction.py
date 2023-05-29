@@ -47,10 +47,10 @@ import os.path as osp
 from absl import app
 from absl import flags
 
-from octree.nerf import models
-from octree.nerf import utils
-from octree.nerf import datasets
-from octree.nerf import sh_proj
+from DOT.octree.nerf import models
+from DOT.octree.nerf import utils
+from DOT.octree.nerf import datasets
+from DOT.octree.nerf import sh_proj
 
 from svox import N3Tree
 from svox import NDCConfig
@@ -330,7 +330,7 @@ def step1(args, tree, nerf, dataset):
         raise ValueError
     del sigmas
 
-    grid = grid[mask]
+    grid = grid[mask.cpu()]
     del mask
     print(grid.shape, grid.min(), grid.max())
     grid = grid.cuda()

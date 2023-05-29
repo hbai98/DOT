@@ -42,8 +42,8 @@ from absl import flags
 from tqdm import tqdm
 import imageio
 
-from octree.nerf import utils
-from octree.nerf import datasets
+from DOT.octree.nerf import utils
+from DOT.octree.nerf import datasets
 
 import svox
 
