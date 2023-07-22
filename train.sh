@@ -19,13 +19,13 @@ export CONFIG_FILE=DOT/nerf_sh/config/blendmsv
 export epochs=100
 export sample_every=20
 export prune_every=1
-export GPUs=7
+export GPUs=2
 # export postier=false
 
 conda activate dot_nerfsh
 CUDA_VISIBLE_DEVICES=$GPUs,
 python -m DOT.nerf_sh.train \
-    --train_dir $CKPT_ROOT/$SCENE"_new"/ \
+    --train_dir $CKPT_ROOT/$SCENE/ \
     --config $CONFIG_FILE \
     --data_dir $DATA_ROOT/$SCENE/ \ 
 
