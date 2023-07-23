@@ -19,7 +19,7 @@ export CONFIG_FILE=DOT/nerf_sh/config/blendmsv
 export epochs=100
 export sample_every=20
 export prune_every=1
-export GPUs=2
+export GPUs=0
 # export postier=false
 
 conda activate dot_nerfsh
