@@ -9,17 +9,17 @@
 
 nvidia-smi
 
-conda activate dot
+# conda activate dot
 export THS_TYPE=weight
 export THS_VAL=1e0
 export DATA_ROOT=../../dataset/BlendedMVS
 export CKPT_ROOT=checkpoints/BlendedMVS
-export SCENE=Character
+export SCENE=Statues #Character Fountain Jade Statues
 export CONFIG_FILE=DOT/nerf_sh/config/blendmsv
 export epochs=100
 export sample_every=20
 export prune_every=1
-export GPUs=0
+export GPUs=3
 # export postier=false
 
 conda activate dot_nerfsh
