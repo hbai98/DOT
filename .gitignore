@@ -133,3 +133,4 @@ checkpoints/
 data/
 err.*
 out.*
+train_backup.sh
