@@ -16,6 +16,7 @@ This is the official implementation of ["Dynamic PlenOctree for Adaptive Samplin
 ![](./fig/teaser.png)
 While the POT framework is effective, its fixed octree structure can limit its adaptability to varying scene complexities. We introduce hierarchical feature fusion with sampling/pruning to overcome this limitation, as illustrated by the dashed box below. Varying colors on the grid represent the training signals. Internal nodes are denoted in **orange**, while leaf nodes in **green**. Pruning nodes are aggregated, and the averaged value is propagated to inoccurs in regions of weak signal, where cached properties in leaf ternal nodes, which become the new leaves. Complementary sampling takes place in the red regions. The resulting sampling distribution exhibits significant improvement, as highlighted by the red boxes in our final octree results.
 ## Updates
+- [2023-07-27] Initial Commits. Code publically available!
 
 ## Results and checkpoints
 | Datasets | Model | GPU | Memory&#8595; | PSNR&#8593; | SSIM&#8593; | LPIPS&#8595; | FPS&#8593; | Checkpoints|
