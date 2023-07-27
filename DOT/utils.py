@@ -118,6 +118,7 @@ def expand(tree, idxs, repeats, self_cp=True):
     tree.refine(sel=sel, repeats=repeats, self_cp=self_cp)
         
 def select(max_sel, reward, rw_idxs):
+    rw_idxs = rw_idxs.to(reward.device)
     p_val = reward  # only MSE
     sel = min(p_val.size(0), max_sel)
     _, idxs = torch.topk(p_val, sel)

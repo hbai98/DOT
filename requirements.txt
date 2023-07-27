@@ -1,4 +1,3 @@
-numpy<1.24,>=1.22
 dotmap
 imageio
 imageio-ffmpeg
@@ -8,7 +7,7 @@ opencv-python>=4.4.0
 Pillow>=7.2.0
 pyyaml>=5.3.1
 tensorboard>=2.4.0
-tensorflow==2.12.0
+tensorflow
 pymcubes
 scipy>=1.6.0
 tqdm

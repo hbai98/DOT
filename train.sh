@@ -11,61 +11,42 @@ nvidia-smi
 
 # conda activate dot
 export THS_TYPE=weight
-export THS_VAL=1e0
-export DATA_ROOT=../../dataset/BlendedMVS
-export CKPT_ROOT=checkpoints/BlendedMVS
-export SCENE=Statues #Character Fountain Jade Statues
-export CONFIG_FILE=DOT/nerf_sh/config/blendmsv
+export THS_VAL=1e1 # 1e0 | 1e1
+export DATA_ROOT=../../dataset/TanksAndTemple # ../../dataset/nerf_synthetic | ../../dataset/TanksAndTemple
+export IN_CKPT_ROOT=~/checkpoints/DOT/pln/tt_sh25 # ~/checkpoints/DOT/pln/syn_sh16 | ~/checkpoints/DOT/pln/tt_sh25
+export OUT_CKPT_ROOT=checkpoints/DOT/tt_sh25 # checkpoints/DOT/syn_sh16 | checkpoints/DOT/tt_sh25
+export SCENE=Ignatius # chari | Ignatius
+export CONFIG_FILE=DOT/nerf_sh/config/tt # DOT/nerf_sh/config/blender | DOT/nerf_sh/config/tt
 export epochs=100
 export sample_every=20
 export prune_every=1
-export GPUs=3
-# export postier=false
-
-conda activate dot_nerfsh
-CUDA_VISIBLE_DEVICES=$GPUs,
-python -m DOT.nerf_sh.train \
-    --train_dir $CKPT_ROOT/$SCENE/ \
-    --config $CONFIG_FILE \
-    --data_dir $DATA_ROOT/$SCENE/ \ 
-
-CUDA_VISIBLE_DEVICES=$GPUs,
-python -m DOT.nerf_sh.eval \
-    --chunk 4096 \
-    --train_dir $CKPT_ROOT/$SCENE/ \
-    --config $CONFIG_FILE \
-    --data_dir $DATA_ROOT/$SCENE/ \ 
-
-# 
-CUDA_VISIBLE_DEVICES=$GPUs,
-python -m DOT.octree.extraction \
-    --train_dir $CKPT_ROOT/$SCENE/ --is_jaxnerf_ckpt \
-    --config $CONFIG_FILE \
-    --data_dir $DATA_ROOT/$SCENE/ \
-    --output $CKPT_ROOT/$SCENE/octrees/tree.npz
-
-# POT
-CUDA_VISIBLE_DEVICES=$GPUs,
-python -m DOT.octree.POT_opt \
-    --input $CKPT_ROOT/$SCENE/octrees/tree.npz \
-    --config $CONFIG_FILE \
-    --data_dir $DATA_ROOT/$SCENE/ \
-    --output $CKPT_ROOT/$SCENE/octrees/pot.npz \
-    --continue_on_decrease
+export GPUs=1
 
 # DOT
 CUDA_VISIBLE_DEVICES=$GPUs,
 python -m DOT.octree.optimization \
-    --input $CKPT_ROOT/$SCENE/octrees/tree.npz \
+    --input $IN_CKPT_ROOT/$SCENE/octrees/tree.npz \
     --config $CONFIG_FILE \
     --data_dir $DATA_ROOT/$SCENE/ \
-    --output $CKPT_ROOT/$SCENE/octrees/dot.npz \
+    --output $OUT_CKPT_ROOT/$SCENE/dot.npz \
     --thresh_type $THS_TYPE \
     --thresh_val $THS_VAL \
     --num_epochs $epochs \
     --prune_every $prune_every \
     --sample_every $sample_every 
-    # --prune_only \ 
+# DOT(R)
+CUDA_VISIBLE_DEVICES=$GPUs,
+python -m DOT.octree.optimization \
+    --input $IN_CKPT_ROOT/$SCENE/octrees/tree.npz \
+    --config $CONFIG_FILE \
+    --data_dir $DATA_ROOT/$SCENE/ \
+    --output $OUT_CKPT_ROOT/$SCENE/dot_r.npz \
+    --thresh_type $THS_TYPE \
+    --thresh_val $THS_VAL \
+    --num_epochs $epochs \
+    --prune_every $prune_every \
+    --sample_every $sample_every \
+    --recursive_prune
 
 python -m DOT.octree.evaluation \
     --input $CKPT_ROOT/$SCENE/octrees/pot.npz \

@@ -135,7 +135,7 @@ flags.DEFINE_float(
 # )
 
 
-flags.DEFINE_bool(
+flags.DEFINE_boolean(
     'sgd_nesterov',
     False,
     'sgd nesterov momentum?')
@@ -146,7 +146,7 @@ flags.DEFINE_string(
 )
 
 # Manual 'val' set
-flags.DEFINE_bool(
+flags.DEFINE_boolean(
     "split_train",
     None,
     "If specified, splits train set instead of loading val set",
@@ -158,35 +158,35 @@ flags.DEFINE_float(
 )
 
 # Do not save since it is slow
-flags.DEFINE_bool(
+flags.DEFINE_boolean(
     "nosave",
     False,
     "If set, does not save (for speed)",
 )
 
-flags.DEFINE_bool(
+flags.DEFINE_boolean(
     "recursive_prune",
     False,
-    'xxx'
+    'Recursive prunning for DOT.'
 )
 
-flags.DEFINE_bool(
+flags.DEFINE_boolean(
     "continue_on_decrease",
     True,
     "If set, continues training even if validation PSNR decreases",
 )
-flags.DEFINE_bool(
+flags.DEFINE_boolean(
     "prune_only",
-    True,
-    "zz"
+    False,
+    "DOT with only pruning operation."
 )
 
-flags.DEFINE_bool(
+flags.DEFINE_boolean(
     "sample_only",
     False,
-    "xx"
+    "DOT with only sampling operation."
 )
-flags.DEFINE_bool(
+flags.DEFINE_boolean(
     "use_grid",
     True,
     "Whether to use the grid instead of tree",
@@ -215,7 +215,6 @@ flags.DEFINE_string(
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 # device = "cuda" 
-
 torch.autograd.set_detect_anomaly(True)
 
 def main(unused_argv):
