@@ -12,5 +12,6 @@ pymcubes
 scipy>=1.6.0
 tqdm
 scikit-image
+lpips
 
 

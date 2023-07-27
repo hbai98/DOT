@@ -2,12 +2,15 @@
 
 By [Haotian Bai](https://scholar.google.com/citations?hl=en&user=DIy4cA0AAAAJ), Yiqi Lin, Yize Chen, Lin Wang
 
+### [Paper] | [Project Page](https://vlislab22.github.io/DOT) | [Youtube]
+
 ## Introduction
 [ICCV 2023] The explicit neural radiance field (NeRF) has gained considerable interest for its efficient training and fast inference capabilities, making it a promising direction such as virtual reality and gaming. In particular, PlenOctree (POT) [1], an explicit hierarchical multi-scale octree representation, has emerged as a structural and influential framework. However, POT’s fixed structure for direct optimization is sub-optimal as the scene complexity evolves continuously with updates to cached color and density, necessitating refining the sampling distribution to capture signal complexity accordingly. To address this issue, we propose the dynamic PlenOctree (DOT), which adaptively refines the sample distribution to adjust to changing scene complexity. Specifically, DOT proposes a concise yet novel hierarchical feature fusion strategy during the iterative rendering process. Firstly, it identifies the regions of interest through training signals to ensure adaptive and efficient refinement. Next, rather than directly filtering out valueless nodes, DOT introduces the sampling and pruning operations for octrees to aggregate features, enabling rapid parameter learning. Compared with POT, our DOT outperforms it by enhancing visual quality, reducing over **55.15/68.84%** parameters, and providing **1.7/1.9** times FPS for NeRF-synthetic and Tanks & Temples, respectively. 
 
 [1] Yu, Alex, et al. "Plenoctrees for real-time rendering of neural radiance fields." Proceedings of the IEEE/CVF International Conference on Computer Vision. 2021.
 
 This is the official implementation of ["Dynamic PlenOctree for Adaptive Sampling Refinement in Explicit NeRF"](https://github.com/164140757/DOT) in PyTorch. Our code is built on [PlenOctree](https://github.com/sxyu/plenoctree). 
+
 
 ## Overview
 ![](./fig/teaser.png)
@@ -120,4 +123,38 @@ e.g.,
 ```
 export DATA_ROOT=../../dataset/TanksAndTemple # ../../dataset/nerf_synthetic | ../../dataset/TanksAndTemple
 export CONFIG_FILE=DOT/nerf_sh/config/tt # DOT/nerf_sh/config/blender | DOT/nerf_sh/config/tt
+```
+### Evaluation
+
+After training, dot.npz or dot_r.npz is availbale at the checkpoint output 
+
+```
+python -m DOT.octree.evaluation \
+    --input $OUT_CKPT_ROOT/$SCENE/dot.npz \
+    --config $CONFIG_FILE \
+    --data_dir $DATA_ROOT/$SCENE/ \
+    --write_images $OUT_CKPT_ROOT/$SCENE/octrees/dot_rend
+```
+
+### Compression
+
+Compression by median-cut could be leveraged to support more lightweight web rendering at the cost of quality,
+```
+python -m DOT.octree.compression \
+    $OUT_CKPT_ROOT/$SCENE/dot.npz \
+    --out_dir $OUT_CKPT_ROOT/$SCENE/cp \
+    --overwrite
+```
+## Visualization
+
+Interested readers may refer to the octree visualization app [volrend](https://github.com/sxyu/volrend) to explore more about the octree sample distribution. 
+
+## Citation
+```
+@inproceedings{Bai2023DOT,
+  title={Dynamic PlenOctree for Adaptive Sampling Refinement in Explicit NeRF},
+  author={Haotian Bai, Yiqi Lin, Yize Chen, Lin Wang},
+  booktitle = {IEEE International Conference on Computer Vision (ICCV)},
+  year={2023}
+}
 ```

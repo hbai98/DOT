@@ -47,17 +47,15 @@ python -m DOT.octree.optimization \
     --prune_every $prune_every \
     --sample_every $sample_every \
     --recursive_prune
-
+# Evaluation
 python -m DOT.octree.evaluation \
-    --input $CKPT_ROOT/$SCENE/octrees/pot.npz \
+    --input $OUT_CKPT_ROOT/$SCENE/dot.npz \
     --config $CONFIG_FILE \
     --data_dir $DATA_ROOT/$SCENE/ \
-    --write_images $CKPT_ROOT/$SCENE/octrees/pot_rend
+    --write_images $OUT_CKPT_ROOT/$SCENE/octrees/dot_rend
 
+# Compression
 python -m DOT.octree.compression \
-    $CKPT_ROOT/$SCENE/octrees/dot.npz \
-    --out_dir $CKPT_ROOT/$SCENE/octrees/compress \
+    $OUT_CKPT_ROOT/$SCENE/dot.npz \
+    --out_dir $OUT_CKPT_ROOT/$SCENE/cp \
     --overwrite
-# 11074519
-
-# ns-train vanilla-nerf --data ../../dataset/BlendedMVS
