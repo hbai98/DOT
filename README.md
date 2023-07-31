@@ -2,7 +2,7 @@
 
 By [Haotian Bai](https://scholar.google.com/citations?hl=en&user=DIy4cA0AAAAJ), Yiqi Lin, Yize Chen, Lin Wang
 
-### [Paper] | [Project Page](https://vlislab22.github.io/DOT) | [Youtube]
+### [Paper](http://arxiv.org/abs/2307.15333) | [Project Page](https://vlislab22.github.io/DOT) | [Youtube]
 
 ## Introduction
 [ICCV 2023] The explicit neural radiance field (NeRF) has gained considerable interest for its efficient training and fast inference capabilities, making it a promising direction such as virtual reality and gaming. In particular, PlenOctree (POT) [1], an explicit hierarchical multi-scale octree representation, has emerged as a structural and influential framework. However, POT’s fixed structure for direct optimization is sub-optimal as the scene complexity evolves continuously with updates to cached color and density, necessitating refining the sampling distribution to capture signal complexity accordingly. To address this issue, we propose the dynamic PlenOctree (DOT), which adaptively refines the sample distribution to adjust to changing scene complexity. Specifically, DOT proposes a concise yet novel hierarchical feature fusion strategy during the iterative rendering process. Firstly, it identifies the regions of interest through training signals to ensure adaptive and efficient refinement. Next, rather than directly filtering out valueless nodes, DOT introduces the sampling and pruning operations for octrees to aggregate features, enabling rapid parameter learning. Compared with POT, our DOT outperforms it by enhancing visual quality, reducing over **55.15/68.84%** parameters, and providing **1.7/1.9** times FPS for NeRF-synthetic and Tanks & Temples, respectively. 
