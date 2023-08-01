@@ -29,7 +29,7 @@ The resulting sampling distribution exhibits significant improvement, as highlig
 | NeRF-Synthetic | DOT(R) | 3090 | 0.80G | 32.03 | 0.958 | 0.054 |474.2 |[OneDrive](https://hkustgz-my.sharepoint.com/:f:/g/personal/haotianbai_hkust-gz_edu_cn/EnX_Ux5fNdVLiu1ksnrRb9wByIkdwHq54xzQ8Aavr3r7ag?e=qcDlZ5)
 | Tanks&Temples | POT | 3090 | 3.53G | 28.00 | 0.917 | 0.131 | 74.0|[Google Drive](https://drive.google.com/drive/folders/1VZvKZeRPfoljhGTi9w78__iWN-QQBw8U) 
 | Tanks&Temples | DOT | 3090 | 1.10G | 28.28 | 0.922 | 0.121 | 186.2|[OneDrive](https://hkustgz-my.sharepoint.com/:f:/g/personal/haotianbai_hkust-gz_edu_cn/Eu3lrFk0Q6VPutSGYPEbSFEB20x6imJyeneLT-_cweUBmA?e=4RPVGf) 
-| Tanks&Temples | DOT | 3090 | 0.80G | 28.25 | 0.922 | 0.122 | 216.1|[OneDrive](https://hkustgz-my.sharepoint.com/:f:/g/personal/haotianbai_hkust-gz_edu_cn/Eu3lrFk0Q6VPutSGYPEbSFEB20x6imJyeneLT-_cweUBmA?e=4RPVGf) 
+| Tanks&Temples | DOT(R) | 3090 | 0.80G | 28.25 | 0.922 | 0.122 | 216.1|[OneDrive](https://hkustgz-my.sharepoint.com/:f:/g/personal/haotianbai_hkust-gz_edu_cn/Eu3lrFk0Q6VPutSGYPEbSFEB20x6imJyeneLT-_cweUBmA?e=4RPVGf) 
 ## Usage
 
 ### Installation
