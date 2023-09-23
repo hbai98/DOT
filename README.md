@@ -2,7 +2,7 @@
 
 By [Haotian Bai](https://scholar.google.com/citations?hl=en&user=DIy4cA0AAAAJ), Yiqi Lin, Yize Chen, Lin Wang
 
-### [Paper](http://arxiv.org/abs/2307.15333) | [Project Page](https://vlislab22.github.io/DOT) | [Youtube]
+### [Paper](http://arxiv.org/abs/2307.15333) | [Project Page](https://vlislab22.github.io/DOT) | [Youtube](https://www.youtube.com/watch?v=i9MnoFhH8Ec)
 
 ## Introduction
 [ICCV 2023] The explicit neural radiance field (NeRF) has gained considerable interest for its efficient training and fast inference capabilities, making it a promising direction such as virtual reality and gaming. In particular, PlenOctree (POT) [1], an explicit hierarchical multi-scale octree representation, has emerged as a structural and influential framework. However, POT’s fixed structure for direct optimization is sub-optimal as the scene complexity evolves continuously with updates to cached color and density, necessitating refining the sampling distribution to capture signal complexity accordingly. To address this issue, we propose the dynamic PlenOctree (DOT), which adaptively refines the sample distribution to adjust to changing scene complexity. Specifically, DOT proposes a concise yet novel hierarchical feature fusion strategy during the iterative rendering process. Firstly, it identifies the regions of interest through training signals to ensure adaptive and efficient refinement. Next, rather than directly filtering out valueless nodes, DOT introduces the sampling and pruning operations for octrees to aggregate features, enabling rapid parameter learning. Compared with POT, our DOT outperforms it by enhancing visual quality, reducing over **55.15/68.84%** parameters, and providing **1.7/1.9** times FPS for NeRF-synthetic and Tanks & Temples, respectively. 
@@ -11,14 +11,17 @@ By [Haotian Bai](https://scholar.google.com/citations?hl=en&user=DIy4cA0AAAAJ), 
 
 This is the official implementation of ["Dynamic PlenOctree for Adaptive Sampling Refinement in Explicit NeRF"](https://github.com/164140757/DOT) in PyTorch. Our code is built on [PlenOctree](https://github.com/sxyu/plenoctree). 
 
-
+## Poster
+![](./fig/ICCV2023_poster.png)
 ## Overview
-![](./fig/teaser.png)
+<!-- ![](./fig/teaser.png) -->
 While the POT framework is effective, its fixed octree structure can limit its adaptability to varying scene complexities. We introduce hierarchical feature fusion with sampling/pruning to overcome this limitation, as illustrated by the dashed box below. Varying colors on the grid represent the training signals. 
 Internal nodes are denoted in **orange**, while leaf nodes in **green**. Pruning nodes occurs in regions of weak signal, where cached properties in leaf ternal nodes are aggregated, and the averaged value is propagated to internal nodes, which become the new leaves. 
 Complementary sampling takes place in the red regions. 
 The resulting sampling distribution exhibits significant improvement, as highlighted by the red boxes in our final octree results.
 ## Updates
+- [2023-09-24] Poster for ICCV 2023 is available!
+- [2023-09-24] Youtube video is available!
 - [2023-07-27] Initial Commits. Code publically available!
 
 ## Results and checkpoints
